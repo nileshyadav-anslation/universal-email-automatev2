@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Email Read Automate</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="logo-wrap">
+        <div class="logo-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 8L10.89 13.26C11.2187 13.4793 11.6049 13.5963 12 13.5963C12.3951 13.5963 12.7813 13.4793 13.11 13.26L21 8M5 19H19C19.5304 19 20.0391 18.7893 20.4142 18.4142C20.7893 18.0391 21 17.5304 21 17V7C21 6.46957 20.7893 5.96086 20.4142 5.58579C20.0391 5.21071 19.5304 5 19 5H5C4.46957 5 3.96086 5.21071 3.58579 5.58579C3.21071 5.96086 3 6.46957 3 7V17C3 17.5304 3.21071 18.0391 3.58579 18.4142C3.96086 18.7893 4.46957 19 5 19Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="brand">Email Read</span>
+          <span class="brand-accent">Automate</span>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-label" id="statusLabel">Idle</span>
+      </div>
+    </header>
+
+    <!-- Gmail Check Warning -->
+    <div class="alert" id="gmailAlert" style="display:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 9V13M12 17H12.01M10.29 3.86L1.82 18A2 2 0 003.54 21H20.46A2 2 0 0022.18 18L13.71 3.86A2 2 0 0010.29 3.86Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Open Gmail, Yahoo, AOL, Outlook, Proton, or Zoho Mail to use the extension
+    </div>
+
+    <!-- Main Control Card -->
+    <div class="card control-card">
+      <div class="card-label">Automation Control</div>
+      <div class="btn-group">
+        <button class="btn btn-start" id="btnStart">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Start
+        </button>
+        <button class="btn btn-pause" id="btnPause" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          Pause
+        </button>
+        <button class="btn btn-stop" id="btnStop" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+          Stop
+        </button>
+      </div>
+    </div>
+
+    <!-- Stats Card -->
+    <div class="card stats-card">
+      <div class="card-label">Session Stats</div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="statOpened">0</div>
+          <div class="stat-name">Opened</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="statRuntime">0:00</div>
+          <div class="stat-name">Runtime</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="statUnread">—</div>
+          <div class="stat-name">Unread</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Card -->
+    <div class="card settings-card">
+      <div class="card-label">Settings</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Mail Provider</span>
+          <span class="setting-desc">Choose which mailbox to open and automate</span>
+        </div>
+        <div class="setting-control">
+          <select id="providerSelect" class="batch-select">
+            <option value="gmail">Gmail</option>
+            <option value="yahoo">Yahoo</option>
+            <option value="aol">AOL</option>
+            <option value="outlook">Outlook</option>
+            <option value="proton">Proton</option>
+            <option value="zoho">Zoho</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row-stack automation-template-card">
+        <div class="setting-info">
+          <span class="setting-name">Automation Templates</span>
+          <span class="setting-desc">Save and reuse workflows like Open Only, Open + Links, or Reply mode</span>
+        </div>
+        <div class="template-controls">
+          <select id="automationTemplateSelect" class="batch-select template-select">
+            <option value="">Choose template</option>
+          </select>
+          <button class="btn settings-action" id="btnApplyAutomationTemplate" disabled>Apply</button>
+        </div>
+        <div class="template-controls">
+          <input
+            type="text"
+            id="automationTemplateNameInput"
+            class="batch-select template-name-input"
+            maxlength="50"
+            placeholder="Template name"
+          />
+          <button class="btn settings-action" id="btnSaveAutomationTemplate">Save Current</button>
+          <button class="btn settings-action danger" id="btnDeleteAutomationTemplate" disabled>Delete</button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Reading Time</span>
+          <span class="setting-desc">Time spent on each email</span>
+        </div>
+        <div class="setting-control">
+          <span class="val-badge" id="readTimeVal">4s</span>
+          <input type="range" class="slider" id="readTimeSlider" min="1" max="15" value="4" />
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Next Email Delay</span>
+          <span class="setting-desc">Pause before next email</span>
+        </div>
+        <div class="setting-control">
+          <span class="val-badge" id="backDelayVal">2s</span>
+          <input type="range" class="slider" id="backDelaySlider" min="1" max="10" value="2" />
+        </div>
+      </div>
+       <!-- Total Emails Limit -->
+   <div class="setting-row">
+
+  <div class="setting-info">
+    <span class="setting-name">Total Emails Limit</span>
+    <span class="setting-desc">Maximum emails to process</span>
+  </div>
+
+  <div class="setting-control">
+    <input
+      type="number"
+      id="maxEmailsInput"
+      min="1"
+      max="200"
+      value="20"
+      class="batch-select"
+    />
+  </div>
+
+</div>
+       <!-- user choose emails to read -->
+        <!-- <div class="setting-row">
+        
+  <div class="setting-info">
+    <span class="setting-name">Emails Per Cycle</span>
+    <span class="setting-desc">How many unread emails to open</span>
+  </div>
+
+  <div class="setting-control">
+    <select id="batchSizeSelect" class="batch-select">
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+      <option value="5">5</option>
+      <option value="10">10</option>
+    </select>
+  </div>
+</div>  -->
+ 
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Auto Refresh</span>
+          <span class="setting-desc">Refresh inbox between runs</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="autoRefreshToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Random Email Opening</span>
+          <span class="setting-desc">Open unread emails in random order</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="randomEmailOpeningToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Retry Failed Opens</span>
+          <span class="setting-desc">Retry email opening up to 3 times</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="retryEmailOpeningToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Manual Activity Pause</span>
+          <span class="setting-desc">Pause briefly when user clicks or types</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="manualActivityPauseToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Enable Account Switching</span>
+          <span class="setting-desc">Process selected logged-in accounts one at a time</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="enableAccountSwitchingToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row-stack" id="accountSelectionRow" style="display:none;">
+        <div class="setting-info">
+          <span class="setting-name">Accounts</span>
+          <span class="setting-desc">Only checked accounts participate</span>
+        </div>
+        <div class="account-list" id="accountList">
+          <div class="account-empty">Enable switching and open a supported inbox.</div>
+        </div>
+        <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Enable Link Opening</span>
+          <span class="setting-desc">Open safe links found in emails</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="enableLinkOpeningToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Max Links Per Email</span>
+          <span class="setting-desc">Safe links to open before replying</span>
+        </div>
+        <div class="setting-control">
+          <input
+            type="number"
+            id="maxLinksPerEmailInput"
+            min="1"
+            max="3"
+            value="1"
+            class="batch-select"
+          />
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Enable Auto Reply</span>
+          <span class="setting-desc">Send a template reply after processing</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="enableAutoReplyToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Processed Tracking</span>
+          <span class="setting-desc">Skip emails already processed</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="enableProcessedTrackingToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Reprocessing Mode</span>
+          <span class="setting-desc">Control processed unread emails</span>
+        </div>
+        <div class="setting-control">
+          <select id="reprocessingModeSelect" class="batch-select">
+            <option value="never">Never Reprocess</option>
+            <option value="unread">Reprocess If Marked Unread</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row-stack">
+        <div class="setting-info">
+          <span class="setting-name">Reply Templates</span>
+          <span class="setting-desc">One template per line. Empty uses defaults.</span>
+        </div>
+        <textarea id="replyTemplatesInput" class="template-textarea" rows="5"></textarea>
+        <button class="btn settings-action" id="btnSaveTemplates">Save Templates</button>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Processed History</span>
+          <span class="setting-desc">Clear records and in-memory caches</span>
+        </div>
+        <div class="setting-control">
+          <button class="btn settings-action danger" id="btnClearProcessedHistory">Clear Processed History</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="card log-card">
+      <div class="card-label">Activity Log</div>
+      <div class="log-scroll" id="logScroll">
+        <div class="log-empty" id="logEmpty">No activity yet. Start the automation.</div>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <span>Email Read Automate v1.0.0(v2)</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "Email Read Automate",
+  "version": "1.0.0",
+  "description": "Automatically open, read, and process unread emails with templates, retry handling, account switching, and safe automation.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://mail.google.com/*",
+    "https://mail.yahoo.com/*",
+    "https://mail.aol.com/*",
+    "https://outlook.live.com/*",
+    "https://mail.proton.me/*",
+    "https://mail.zoho.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://mail.yahoo.com/*",
+        "https://mail.aol.com/*",
+        "https://outlook.live.com/*",
+        "https://mail.proton.me/*",
+        "https://mail.zoho.com/*"
+      ],
+      "js": [
+        "linkProcessor.js",
+        "replyEngine.js",
+        "processedEmailManager.js",
+        "providers/gmailProvider.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
