@@ -720,5 +720,5 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadSettings();
   await checkGmailAndShowAlert();
   setStatus('idle', 'Idle');
-  log('Extension ready. Open Gmail to start.', 'info');
+  log('Extension ready. Choose a provider and click Start.', 'info');
 });

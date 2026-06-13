@@ -3,6 +3,12 @@
 (function () {
   "use strict";
 
+  if (window.__emailReadAutomateContentLoaded) {
+    console.warn("[EmailReadAutomate] Duplicate content script ignored");
+    return;
+  }
+  window.__emailReadAutomateContentLoaded = true;
+
   const PROVIDERS = {
     gmail: {
       host: "mail.google.com",
@@ -151,13 +157,22 @@ zoho: {
       //   '[data-test-id="message-list-item"][data-test-read="false"]',
       // ],
 
-        unreadSelectors: [
-  'a[data-test-id="message-item-main-content"][aria-label*="Unread"]',
-  '[aria-label*="Unread"]',
-  'a[data-test-id="message-item-main-content"]'
-],
+      unreadSelectors: [
+        '[data-test-id="message-list-item"][data-test-read="false"]',
+        '[data-test-id="message-list-item"][aria-labelledby*="unread-message-status"]',
+        '[data-test-id="message-list-item"][aria-label*="Unread"]',
+        '[data-test-id="message-list-item"][title*="Unread"]',
+        '[data-test-id="message-list-item"]:has([data-test-id="unread-indicator"])',
+        '[data-test-id="unread-indicator"]',
+        'a[data-test-id="message-item-main-content"][aria-label*="Unread"]',
+        'a[data-test-id="message-item-main-content"][title*="Unread"]',
+        '[data-test-id="message-list-item"] [aria-label*="Unread"]',
+        '[data-test-id="message-list-item"] [title*="Unread"]',
+      ],
 
       subjectSelectors: [
+        '[id^="email-subject-"]',
+        '[id^="email-subject-snippet-"]',
         '[data-test-id="message-list-item-subject"] span',
         '[data-test-id="message-list-item-subject"]',
         "span.subject",
@@ -175,6 +190,8 @@ zoho: {
       ],
 
       inboxSelectors: [
+        '[data-test-id="message-list-item"]',
+        '[role="link"][data-test-id="message-list-item"]',
         'ul[data-test-id="message-list"]',
         '[data-test-id="virtual-list"]',
       ],
@@ -183,6 +200,50 @@ zoho: {
       // isUnreadRow(row) {
       //   return row.getAttribute("data-test-read") === "false";
       // },
+      isUnreadRow(row) {
+        const normalizedRow = normalizeEmailRow(row);
+        const readState = normalizedRow.getAttribute("data-test-read");
+        if (readState === "false") return true;
+        if (readState === "true") return false;
+
+        const labelledBy = normalizedRow.getAttribute("aria-labelledby") || "";
+        const hasUnreadStatusLabel = labelledBy
+          .split(/\s+/)
+          .some((id) => {
+            if (!id || !id.startsWith("unread-message-status")) return false;
+
+            const label = document.getElementById(id);
+            return label?.textContent?.trim().toLowerCase() === "unread message";
+          });
+        if (hasUnreadStatusLabel) return true;
+
+        const unreadIndicator = normalizedRow.querySelector('[data-test-id="unread-indicator"]');
+        if (unreadIndicator) {
+          const visibleDot = Array.from(unreadIndicator.querySelectorAll("span, div")).some((dot) => {
+            const dotStyle = window.getComputedStyle(dot);
+            const dotRect = dot.getBoundingClientRect();
+
+            return (
+              dotStyle.display !== "none" &&
+              dotStyle.visibility !== "hidden" &&
+              !dot.hasAttribute("hidden") &&
+              dot.getAttribute("aria-hidden") !== "true" &&
+              dotRect.width > 0 &&
+              dotRect.height > 0
+            );
+          });
+
+          if (visibleDot) return true;
+        }
+
+        const markerText = [
+          normalizedRow.getAttribute("aria-label") || "",
+          normalizedRow.getAttribute("title") || "",
+          normalizedRow.textContent || "",
+        ].join(" ").toLowerCase();
+
+        return markerText.includes("unread message");
+      },
     },
 
     aol: {
@@ -194,10 +255,17 @@ zoho: {
       // ],
 
       unreadSelectors: [
-  'a[data-test-id="message-item-main-content"][aria-label*="Unread"]',
-  '[aria-label*="Unread"]',
-  'a[data-test-id="message-item-main-content"]'
-],
+        '[data-test-id="message-list-item"][data-test-read="false"]',
+        '[data-test-id="message-list-item"][aria-labelledby*="unread-message-status"]',
+        '[data-test-id="message-list-item"][aria-label*="Unread"]',
+        '[data-test-id="message-list-item"][title*="Unread"]',
+        '[data-test-id="message-list-item"]:has([data-test-id="unread-indicator"])',
+        '[data-test-id="unread-indicator"]',
+        'a[data-test-id="message-item-main-content"][aria-label*="Unread"]',
+        'a[data-test-id="message-item-main-content"][title*="Unread"]',
+        '[data-test-id="message-list-item"] [aria-label*="Unread"]',
+        '[data-test-id="message-list-item"] [title*="Unread"]',
+      ],
 
       subjectSelectors: [
         '[data-test-id="message-list-item-subject"] span',
@@ -217,9 +285,9 @@ zoho: {
         '[data-test-id="virtual-list"]',
       ],
 
-      // isUnreadRow(row) {
-      //   return row.getAttribute("data-test-read") === "false";
-      // },
+      isUnreadRow(row) {
+        return PROVIDERS.yahoo.isUnreadRow(row);
+      },
     },
   };
 
@@ -280,6 +348,7 @@ zoho: {
   let automationTimeout = null;
   let processedHrefs = new Set();
   let gmailProvider = null;
+  let yahooProvider = null;
   let activeAccount = null;
   let manualPauseUntil = 0;
   let manualPauseLogged = false;
@@ -523,16 +592,53 @@ zoho: {
    * Get all unread email rows.
    * Gmail marks unread rows with class "zE" or "zA zE"
    */
+  function normalizeEmailRow(row) {
+    if (!row || !provider) return row;
+
+    if (provider.host.includes("yahoo") || provider.host.includes("aol")) {
+      return row.closest('[data-test-id="message-list-item"]') || row;
+    }
+
+    return row;
+  }
+
+  function isVisibleMailElement(element) {
+    if (!element) return false;
+
+    const rect = element.getBoundingClientRect();
+    const hasSize = rect.height > 0 && rect.width > 0;
+    if (!hasSize) return false;
+
+    if (provider && (provider.host.includes("yahoo") || provider.host.includes("aol"))) {
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        !element.hasAttribute("hidden") &&
+        element.getAttribute("aria-hidden") !== "true"
+      );
+    }
+
+    return element.offsetParent !== null;
+  }
+
   function getUnreadRows() {
     if (!provider) return [];
 
     for (const sel of provider.unreadSelectors) {
       const rows = Array.from(document.querySelectorAll(sel));
+      const normalizedRows = [];
+      const seenRows = new Set();
 
-      const visibleRows = rows.filter((row) => {
-        const rect = row.getBoundingClientRect();
-        return rect.height > 0 && rect.width > 0 && row.offsetParent !== null;
-      });
+      for (const row of rows) {
+        const normalizedRow = normalizeEmailRow(row);
+        if (normalizedRow && !seenRows.has(normalizedRow)) {
+          normalizedRows.push(normalizedRow);
+          seenRows.add(normalizedRow);
+        }
+      }
+
+      const visibleRows = normalizedRows.filter(isVisibleMailElement);
 
       if (visibleRows.length > 0) {
         // ✅ For Yahoo/AOL: apply the isUnreadRow() check if it exists
@@ -548,6 +654,110 @@ zoho: {
     }
 
     return [];
+  }
+
+  function isYahooLikeProvider() {
+    return Boolean(provider && (provider.host.includes("yahoo") || provider.host.includes("aol")));
+  }
+
+  function getScrollableAncestor(element) {
+    let current = element;
+
+    while (current && current !== document.body && current !== document.documentElement) {
+      const style = window.getComputedStyle(current);
+      const overflowY = style.overflowY || "";
+      const canScroll =
+        current.scrollHeight > current.clientHeight + 8 &&
+        (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay");
+
+      if (canScroll) return current;
+      current = current.parentElement;
+    }
+
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function getYahooMailboxScrollElement() {
+    if (!isYahooLikeProvider()) return null;
+
+    const anchor =
+      document.querySelector('[data-test-id="virtual-list"]') ||
+      document.querySelector('ul[data-test-id="message-list"]') ||
+      document.querySelector('[data-test-id="message-list-item"]');
+
+    if (anchor) return getScrollableAncestor(anchor);
+    return document.scrollingElement || document.documentElement;
+  }
+
+  async function resetYahooMailboxScrollPosition() {
+    const scrollElement = getYahooMailboxScrollElement();
+    if (!scrollElement) return;
+
+    scrollElement.scrollTo({ top: 0, behavior: "auto" });
+    await sleep(500);
+  }
+
+  function getQueuedMovedRowsInCurrentMailbox(mailboxLabel = "") {
+    const mailboxProvider = getMailboxProvider();
+    if (!mailboxProvider || mailboxLabel !== "Inbox" || !mailboxProvider.hasMovedSpamQueue()) {
+      return [];
+    }
+
+    return mailboxProvider.getMovedSpamRowsVisibleInInbox();
+  }
+
+  function filterCachedProcessableRows(rows = []) {
+    if (!settings.enableProcessedTracking || canReprocessUnread()) {
+      return rows;
+    }
+
+    return rows.filter((row) => {
+      const id = getEmailRowId(row) || getEmailLink(row)?.href || "";
+      return !processedHrefs.has(getProcessedCacheKey(id));
+    });
+  }
+
+  function hasProcessableRowsInCurrentMailbox(mailboxLabel = "") {
+    const rows = getUnreadRows();
+    const seenRows = new Set(rows);
+
+    for (const queuedRow of getQueuedMovedRowsInCurrentMailbox(mailboxLabel)) {
+      if (!seenRows.has(queuedRow)) {
+        rows.push(queuedRow);
+        seenRows.add(queuedRow);
+      }
+    }
+
+    return filterCachedProcessableRows(rows).length > 0;
+  }
+
+  async function scrollYahooMailboxUntilProcessableRows(mailboxLabel = "") {
+    if (!isYahooLikeProvider()) return false;
+
+    const scrollElement = getYahooMailboxScrollElement();
+    if (!scrollElement) return false;
+
+    const maxScrolls = 14;
+    let lastTop = scrollElement.scrollTop;
+
+    for (let i = 0; i < maxScrolls; i++) {
+      if (state === "stopped") return false;
+      if (hasProcessableRowsInCurrentMailbox(mailboxLabel)) return true;
+
+      const distance = Math.max(300, Math.floor((scrollElement.clientHeight || window.innerHeight) * 0.85));
+      scrollElement.scrollBy({ top: distance, behavior: "auto" });
+      await sleep(700);
+
+      const currentTop = scrollElement.scrollTop;
+      const nearBottom = currentTop + scrollElement.clientHeight >= scrollElement.scrollHeight - 8;
+
+      if (hasProcessableRowsInCurrentMailbox(mailboxLabel)) return true;
+      if (nearBottom || currentTop === lastTop) return false;
+
+      lastTop = currentTop;
+    }
+
+    return hasProcessableRowsInCurrentMailbox(mailboxLabel);
   }
 
   /**
@@ -581,12 +791,15 @@ zoho: {
     provider.host.includes("yahoo") ||
     provider.host.includes("aol")
   ) {
+    const normalizedRow = normalizeEmailRow(row);
 
     return (
-      row.querySelector(
+      normalizedRow.querySelector(
         'a[data-test-id="message-item-main-content"]'
       ) ||
-      row
+      (normalizedRow.matches('[data-test-id="message-list-item"][role="link"]') ? normalizedRow : null) ||
+      normalizedRow.querySelector('[role="link"]') ||
+      normalizedRow
     );
   }
 
@@ -709,6 +922,15 @@ zoho: {
 
   // Yahoo
   if (provider.host.includes("yahoo")) {
+    const backBtn =
+      document.querySelector('button[aria-label="Back"]') ||
+      document.querySelector('[title="Back"]') ||
+      Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.trim() === "Back");
+
+    if (backBtn) {
+      clickElementLikeUser(backBtn);
+      return;
+    }
 
     const inboxBtn =
       document.querySelector('a[href*="/folders/1"]') ||
@@ -722,7 +944,7 @@ zoho: {
     }
 
     window.location.href =
-      "https://mail.yahoo.com/d/folders/1";
+      "https://mail.yahoo.com/n/folders/1?.src=ym&reason=myc";
 
     return;
   }
@@ -924,13 +1146,20 @@ zoho: {
   function getSelectedAccountObjects() {
     const discovered = discoverAccounts();
     const selectedIds = Array.isArray(settings.selectedAccounts) ? settings.selectedAccounts : [];
+    const currentAccount = getActiveAccount();
 
     if (!settings.enableAccountSwitching || selectedIds.length === 0) {
-      return [getActiveAccount()];
+      return [currentAccount];
     }
 
     const discoveredById = new Map(discovered.map((account) => [account.id, account]));
-    return selectedIds
+    const providerSelectedIds = selectedIds.filter((id) => id === currentAccount.id || id.startsWith(`${providerName}:`));
+
+    if (providerSelectedIds.length === 0) {
+      return [currentAccount];
+    }
+
+    return providerSelectedIds
       .map((id) => discoveredById.get(id) || makeAccount(id, id))
       .filter((account) => account && account.id);
   }
@@ -1007,7 +1236,14 @@ zoho: {
     }
 
     if (provider.host.includes("yahoo") || provider.host.includes("aol")) {
-      return row.querySelector('a[data-test-id="message-item-main-content"]') || row;
+      const normalizedRow = normalizeEmailRow(row);
+
+      return (
+        normalizedRow.querySelector('a[data-test-id="message-item-main-content"]') ||
+        (normalizedRow.matches('[data-test-id="message-list-item"][role="link"]') ? normalizedRow : null) ||
+        normalizedRow.querySelector('[role="link"]') ||
+        normalizedRow
+      );
     }
 
     if (provider.host.includes("outlook")) {
@@ -1029,13 +1265,32 @@ zoho: {
     if (!element) return false;
 
     element.scrollIntoView({ block: "center", inline: "nearest" });
-    element.dispatchEvent(
-      new MouseEvent("click", {
+    try {
+      element.focus({ preventScroll: true });
+    } catch (error) {
+      // Some Yahoo list rows are programmatically clickable but not focusable.
+    }
+
+    ["pointerover", "mouseover", "pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach((eventName) => {
+      const EventCtor = eventName.startsWith("pointer") && window.PointerEvent ? PointerEvent : MouseEvent;
+      element.dispatchEvent(new EventCtor(eventName, {
         bubbles: true,
         cancelable: true,
-        view: window
-      })
-    );
+        view: window,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: eventName.includes("down") ? 1 : 0,
+      }));
+    });
+
+    try {
+      element.click();
+    } catch (error) {
+      // The dispatched click above is still the primary path.
+    }
+
     return true;
   }
 
@@ -1043,6 +1298,16 @@ zoho: {
     if (!row) return "";
 
     const innerItem = row.querySelector('[data-test-id="message-list-item"]');
+    if (provider && (provider.host.includes("yahoo") || provider.host.includes("aol"))) {
+      const sender =
+        row.querySelector('[id^="email-sender-"]')?.textContent?.trim() ||
+        row.querySelector('[id^="email-sender-"]')?.getAttribute("title") ||
+        "";
+      const subject = getEmailSubject(row);
+      const date = row.querySelector('[id^="email-date-"]')?.textContent?.trim() || "";
+      return [sender, subject, date].filter(Boolean).join("|") || "";
+    }
+
     return (
       row.getAttribute("data-thread-id") ||
       row.getAttribute("data-convid") ||
@@ -1060,7 +1325,7 @@ zoho: {
     return getUnreadRows().find((candidate) => getEmailRowId(candidate) === rowId) || null;
   }
 
-  async function openEmailWithRetry(row, subject, rowId = "") {
+  async function openEmailWithRetry(row, subject, rowId = "", mailboxLabel = "") {
     const maxAttempts = settings.retryEmailOpening ? 3 : 1;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1092,7 +1357,17 @@ zoho: {
 
       if (attempt < maxAttempts) {
         log(`Open failed. Preparing retry ${attempt + 1}/${maxAttempts}…`, "warn");
-        goToInbox();
+        const mailboxProvider = getMailboxProvider();
+        if (
+          mailboxLabel === "Spam" &&
+          mailboxProvider &&
+          mailboxProvider.navigateMailbox &&
+          (provider.host.includes("yahoo") || provider.host.includes("aol"))
+        ) {
+          await mailboxProvider.navigateMailbox("spam");
+        } else {
+          goToInbox();
+        }
         await waitForInbox(7000);
         await sleep(800);
       }
@@ -1156,11 +1431,44 @@ zoho: {
     return gmailProvider;
   }
 
+  function getYahooProvider() {
+    if (!yahooProvider && window.YahooProvider) {
+      yahooProvider = window.YahooProvider.create({
+        getProvider: () => provider,
+        getState: () => state,
+        sleep,
+        log,
+        waitForInbox,
+        getEmailRowId,
+        getEmailSubject,
+      });
+    }
+
+    return yahooProvider;
+  }
+
   //  Main Automation Loop
 
   function isGmailProvider() {
     const gmail = getGmailProvider();
     return Boolean(gmail && gmail.isProvider());
+  }
+
+  function isYahooProvider() {
+    const yahoo = getYahooProvider();
+    return Boolean(yahoo && yahoo.isProvider());
+  }
+
+  function getMailboxProvider() {
+    if (isGmailProvider()) return getGmailProvider();
+    if (isYahooProvider()) return getYahooProvider();
+    return null;
+  }
+
+  function getSpamMoveProvider(mailboxLabel) {
+    if (mailboxLabel !== "Spam") return null;
+    const mailboxProvider = getMailboxProvider();
+    return mailboxProvider && mailboxProvider.moveOpenedSpamEmailToInbox ? mailboxProvider : null;
   }
 
   function getGmailMailboxUrl(folder = "inbox") {
@@ -1436,8 +1744,9 @@ zoho: {
   function getFilteredUnreadRows(mailboxLabel = "") {
     let unreadRows = getUnreadRows();
 
-    if (isGmailProvider() && mailboxLabel === "Inbox" && getGmailProvider().hasMovedSpamQueue()) {
-      const movedSpamRows = getMovedGmailSpamRowsVisibleInInbox();
+    const mailboxProvider = getMailboxProvider();
+    if (mailboxProvider && mailboxLabel === "Inbox" && mailboxProvider.hasMovedSpamQueue()) {
+      const movedSpamRows = mailboxProvider.getMovedSpamRowsVisibleInInbox();
       const seenRows = new Set(unreadRows);
 
       for (const movedRow of movedSpamRows) {
@@ -1452,14 +1761,7 @@ zoho: {
       }
     }
 
-    unreadRows = unreadRows.filter((row) => {
-      if (!settings.enableProcessedTracking || canReprocessUnread()) {
-        return true;
-      }
-
-      const id = getEmailRowId(row) || getEmailLink(row)?.href || "";
-      return !processedHrefs.has(getProcessedCacheKey(id));
-    });
+    unreadRows = filterCachedProcessableRows(unreadRows);
 
     if (settings.randomEmailOpening && unreadRows.length > 1) {
       unreadRows = shuffleArray(unreadRows);
@@ -1494,6 +1796,20 @@ zoho: {
         sendMsg("UNREAD_COUNT", { count: unreadRows.length });
 
         if (unreadRows.length === 0) {
+          if (isYahooLikeProvider()) {
+            const foundAfterScroll = await scrollYahooMailboxUntilProcessableRows(mailboxLabel);
+            if (foundAfterScroll) {
+              log(`Found more Yahoo ${mailboxLabel} emails after scrolling.`, "info");
+              cycle = 0;
+              continue;
+            }
+          }
+
+          if (isYahooProvider() && mailboxLabel === "Spam") {
+            log(`Finished ${mailboxLabel}.`, "success");
+            break;
+          }
+
           if (isGmailProvider()) {
             const hasNextPage = await goToNextGmailPage();
             if (hasNextPage) {
@@ -1507,9 +1823,21 @@ zoho: {
             await sleep(1500);
             refreshCurrentMailbox();
             await sleep(3000);
+            if (isYahooLikeProvider()) {
+              await resetYahooMailboxScrollPosition();
+            }
 
             unreadRows = getFilteredUnreadRows(mailboxLabel);
             if (unreadRows.length === 0) {
+              if (isYahooLikeProvider()) {
+                const foundAfterRefreshScroll = await scrollYahooMailboxUntilProcessableRows(mailboxLabel);
+                if (foundAfterRefreshScroll) {
+                  log(`Found more Yahoo ${mailboxLabel} emails after refresh and scroll.`, "info");
+                  cycle = 0;
+                  continue;
+                }
+              }
+
               if (isGmailProvider()) {
                 const hasNextAfterRefresh = await goToNextGmailPage();
                 if (hasNextAfterRefresh) {
@@ -1577,7 +1905,7 @@ zoho: {
           const subject = getEmailSubject(row);
           log(`Opening from ${mailboxLabel}: "${subject}"…`);
 
-          const opened = await openEmailWithRetry(row, subject, rowId);
+          const opened = await openEmailWithRetry(row, subject, rowId, mailboxLabel);
           if (!opened) {
             log(`Failed to open email after retry limit, skipping`, "warn");
             goToInbox();
@@ -1586,25 +1914,29 @@ zoho: {
             continue;
           }
 
-          const isGmailSpamMailbox = isGmailProvider() && mailboxLabel === "Spam";
+          const spamMoveProvider = getSpamMoveProvider(mailboxLabel);
           log("Email opened", "success");
 
           if (!(await waitForManualActivityQuiet())) break;
 
           const openedRoot = await waitForEmailContentLoaded();
 
-          if (isGmailSpamMailbox) {
-            if (!gmailSpamEmailLooksSafe(openedRoot)) {
+          if (spamMoveProvider) {
+            if (!spamMoveProvider.emailLooksSafe(openedRoot)) {
               log('Spam email skipped: unsafe link detected. It was not moved to Inbox or processed.', 'warn');
               log(`Returning to ${mailboxLabel}…`);
-              await navigateToGmailMailbox("spam");
+              await spamMoveProvider.navigateMailbox("spam");
               await sleep(settings.backDelay * 1000);
+              if (isYahooLikeProvider()) {
+                cycle = 0;
+                break;
+              }
               continue;
             }
 
-            const movedToInbox = await moveOpenedGmailSpamEmailToInbox();
+            const movedToInbox = await spamMoveProvider.moveOpenedSpamEmailToInbox();
             if (movedToInbox) {
-              rememberMovedGmailSpamEmail(rowId, subject);
+              spamMoveProvider.rememberMovedSpamEmail(rowId, subject);
               log('Safe Spam email moved to Inbox. It will be processed during the Inbox scan.', 'success');
             } else {
               log('Safe Spam email could not be moved, so it was not processed yet.', 'warn');
@@ -1613,8 +1945,12 @@ zoho: {
             if (state === "stopped") break;
             if (!(await waitIfPaused())) break;
 
-            await navigateToGmailMailbox("spam");
+            await spamMoveProvider.navigateMailbox("spam");
             await sleep(settings.backDelay * 1000);
+            if (isYahooLikeProvider()) {
+              cycle = 0;
+              break;
+            }
             continue;
           }
 
@@ -1624,7 +1960,7 @@ zoho: {
           sendMsg("EMAIL_OPENED", { count: emailsOpened, subject });
 
           await processOpenedEmail(rowId);
-          forgetMovedGmailSpamEmail(rowId, subject);
+          getMailboxProvider()?.forgetMovedSpamEmail?.(rowId, subject);
 
           log(`Reading for ${settings.readTime}s…`);
           await sleep(settings.readTime * 1000);
@@ -1640,6 +1976,10 @@ zoho: {
 
           if (state === "stopped") break;
           if (!(await waitIfPaused())) break;
+          if (isYahooLikeProvider()) {
+            cycle = 0;
+            break;
+          }
         }
 
         if (state !== "running") break;
@@ -1655,6 +1995,16 @@ zoho: {
         if (state !== "running" || accountLimitReached) break;
         log(`Checking Gmail ${mailbox.label}…`, "info");
         await navigateToGmailMailbox(mailbox.folder);
+        await processCurrentMailbox(mailbox.label);
+      }
+    } else if (isYahooProvider()) {
+      const yahooMailboxes = getYahooProvider().getMailboxes();
+
+      for (const mailbox of yahooMailboxes) {
+        if (state !== "running" || accountLimitReached) break;
+        log(`Checking Yahoo ${mailbox.label}...`, "info");
+        await getYahooProvider().navigateMailbox(mailbox.folder);
+        await resetYahooMailboxScrollPosition();
         await processCurrentMailbox(mailbox.label);
       }
     } else {
@@ -1692,6 +2042,7 @@ zoho: {
       emailsOpened = Number.isFinite(msg.settings?.sessionOpened) ? msg.settings.sessionOpened : 0;
       processedHrefs.clear();
       getGmailProvider()?.clearMovedSpamQueue();
+      getYahooProvider()?.clearMovedSpamQueue();
       manualPauseUntil = 0;
       manualPauseLogged = false;
       settings = {

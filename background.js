@@ -5,7 +5,7 @@ let gmailTabs = new Set();
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
-  yahoo: 'https://mail.yahoo.com',
+  yahoo: 'https://mail.yahoo.com/n/folders/1?.src=ym&reason=myc',
   aol: 'https://mail.aol.com',
   outlook: 'https://outlook.live.com/mail',
   proton: 'https://mail.proton.me',
@@ -189,6 +189,7 @@ async function injectAutomationScripts(tabId) {
       'replyEngine.js',
       'processedEmailManager.js',
       'providers/gmailProvider.js',
+      'providers/yahooProvider.js',
       'content.js'
     ]
   });

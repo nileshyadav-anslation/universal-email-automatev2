@@ -44,6 +44,7 @@
         "replyEngine.js",
         "processedEmailManager.js",
         "providers/gmailProvider.js",
+        "providers/yahooProvider.js",
         "content.js"
       ],
       "run_at": "document_idle"
