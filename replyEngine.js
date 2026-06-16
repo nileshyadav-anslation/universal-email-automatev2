@@ -22,9 +22,9 @@
       sendButtons: ['button[data-test-id="compose-send-button"]', 'button[aria-label*="Send"]'],
     },
     aol: {
-      replyButtons: ['button[data-test-id="reply-button"]', 'button[aria-label*="Reply"]'],
-      body: ['div[role="textbox"][contenteditable="true"]', '[contenteditable="true"]'],
-      sendButtons: ['button[data-test-id="compose-send-button"]', 'button[aria-label*="Send"]'],
+      replyButtons: ['button[data-test-id="reply"][data-kind="reply"]', 'button[data-test-id="reply"]', 'button[data-kind="reply"]', 'button[data-test-id="reply-button"]', '[data-test-id*="reply"]', 'button[aria-label*="Reply"]', '[aria-label*="Reply"]', '[title*="Reply"]'],
+      body: ['div[role="textbox"][contenteditable="true"]', '[aria-label*="Message"][contenteditable="true"]', '[contenteditable="true"]'],
+      sendButtons: ['button[data-test-id="compose-send-button"]', '[data-test-id*="send"]', 'button[aria-label*="Send"]', '[aria-label*="Send"]', '[title*="Send"]'],
     },
     outlook: {
       replyButtons: ['button[aria-label^="Reply"]', 'button[title^="Reply"]'],

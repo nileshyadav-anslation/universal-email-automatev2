@@ -2,3 +2,14 @@ node_modules/
 .env
 *.log
 dist/
+
+# GSD local workflow artifacts
+.planning/
+.gsd/
+.claude/
+gsd-file-manifest.json
+
+# Graphify local workflow artifacts
+.codex/
+AGENTS.md
+graphify-out/

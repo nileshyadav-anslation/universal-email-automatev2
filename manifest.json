@@ -45,6 +45,8 @@
         "processedEmailManager.js",
         "providers/gmailProvider.js",
         "providers/yahooProvider.js",
+        "providers/aolProvider.js",
+        "providers/outlookProvider.js",
         "content.js"
       ],
       "run_at": "document_idle"

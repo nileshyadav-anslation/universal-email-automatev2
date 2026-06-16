@@ -2,12 +2,13 @@
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
+const CONTENT_SCRIPT_VERSION = '2026-06-16-outlook-selectors-v1';
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
   yahoo: 'https://mail.yahoo.com/n/folders/1?.src=ym&reason=myc',
-  aol: 'https://mail.aol.com',
-  outlook: 'https://outlook.live.com/mail',
+  aol: 'https://mail.aol.com/d/folders/1',
+  outlook: 'https://outlook.live.com/mail/0/',
   proton: 'https://mail.proton.me',
   zoho: 'https://mail.zoho.com'
 };
@@ -102,6 +103,13 @@ async function getOrCreateMailTab(provider = 'gmail') {
   let tab = await getMailTab(provider);
 
   if (tab) {
+    if (provider === 'aol' && !tab.url?.includes('/d/folders/1')) {
+      tab = await chrome.tabs.update(tab.id, { url: defaultUrl, active: true });
+      await waitForTabComplete(tab.id, 60000);
+      await delay(2500);
+      return chrome.tabs.get(tab.id);
+    }
+
     await chrome.tabs.update(tab.id, { active: true });
     if (tab.windowId) {
       await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
@@ -190,6 +198,8 @@ async function injectAutomationScripts(tabId) {
       'processedEmailManager.js',
       'providers/gmailProvider.js',
       'providers/yahooProvider.js',
+      'providers/aolProvider.js',
+      'providers/outlookProvider.js',
       'content.js'
     ]
   });
@@ -197,7 +207,17 @@ async function injectAutomationScripts(tabId) {
 
 async function ensureAutomationScripts(tabId) {
   const ping = await chrome.tabs.sendMessage(tabId, { action: 'PING' }).catch(() => null);
-  if (ping && ping.ok) return;
+  if (ping && ping.ok && ping.version === CONTENT_SCRIPT_VERSION) return;
+
+  if (ping && ping.ok && ping.version !== CONTENT_SCRIPT_VERSION) {
+    await chrome.tabs.reload(tabId);
+    await waitForTabComplete(tabId, 60000);
+    await delay(2500);
+
+    const freshPing = await chrome.tabs.sendMessage(tabId, { action: 'PING' }).catch(() => null);
+    if (freshPing && freshPing.ok && freshPing.version === CONTENT_SCRIPT_VERSION) return;
+  }
+
   await injectAutomationScripts(tabId);
 }
 
