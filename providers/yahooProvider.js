@@ -81,6 +81,222 @@
       return true;
     }
 
+    function normalizeAccountText(value = "") {
+      return String(value).replace(/\s+/g, " ").trim();
+    }
+
+    function extractEmail(value = "") {
+      const match = String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      return match ? match[0].toLowerCase() : null;
+    }
+
+    function makeAccount(id, label, url = null) {
+      return {
+        id,
+        label,
+        provider: "yahoo",
+        switchMethod: "provider",
+        url,
+      };
+    }
+
+    function uniqueAccounts(accounts) {
+      const seen = new Set();
+      return accounts.filter((account) => {
+        if (!account?.id || seen.has(account.id)) return false;
+        seen.add(account.id);
+        return true;
+      });
+    }
+
+    function getActiveEmail() {
+      const titleEmail = extractEmail(document.title);
+      if (titleEmail) return titleEmail;
+
+      const accountButton = document.querySelector("#ybarAccountMenu");
+      const accountLabel = accountButton?.getAttribute("aria-label") || "";
+      const loginMatch = accountLabel.match(/\(([^)@\s]+)\)/);
+      if (loginMatch) return `${loginMatch[1].toLowerCase()}@yahoo.com`;
+
+      return null;
+    }
+
+    function getEmailFromSwitchUrl(url = "") {
+      try {
+        const parsed = new URL(url, window.location.href);
+        const login = parsed.searchParams.get("login");
+        if (login && login.includes("@")) return login.toLowerCase();
+        if (login) return `${login.toLowerCase()}@yahoo.com`;
+      } catch (error) {
+        return null;
+      }
+
+      return null;
+    }
+
+    function makeAccountFromLink(link) {
+      const href = link?.href || "";
+      const label = normalizeAccountText(
+        link?.getAttribute("aria-label") ||
+        link?.textContent ||
+        ""
+      );
+      const email = getEmailFromSwitchUrl(href) || extractEmail(label);
+
+      if (!email) return null;
+
+      return makeAccount(`yahoo:${email}`, label || email, href);
+    }
+
+    function getAccountLinks() {
+      return Array.from(document.querySelectorAll(
+        '#ybarAccountMenuBody a[href*="login.yahoo.com/"][href*="login="]'
+      ));
+    }
+
+    function getAccountsFromDom() {
+      const accounts = [];
+      const activeEmail = getActiveEmail();
+
+      if (activeEmail) {
+        accounts.push(makeAccount(`yahoo:${activeEmail}`, activeEmail, window.location.href));
+      }
+
+      getAccountLinks().forEach((link) => {
+        const account = makeAccountFromLink(link);
+        if (account) accounts.push(account);
+      });
+
+      return uniqueAccounts(accounts);
+    }
+
+    async function openAccountMenu() {
+      const button = document.querySelector("#ybarAccountMenu");
+      if (!button) return null;
+
+      let body = document.querySelector("#ybarAccountMenuBody");
+      if (isVisibleElement(body)) return body;
+
+      for (const eventType of ["mouseover", "mouseenter", "mousemove", "mousedown", "mouseup", "click"]) {
+        button.dispatchEvent(new MouseEvent(eventType, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+        }));
+        await deps.sleep(80);
+      }
+
+      const start = Date.now();
+      while (Date.now() - start < 2500) {
+        body = document.querySelector("#ybarAccountMenuBody");
+        if (isVisibleElement(body)) return body;
+        await deps.sleep(100);
+      }
+
+      return null;
+    }
+
+    async function revealAccountSwitcher(body) {
+      if (!body) return null;
+
+      const switchButton = Array.from(body.querySelectorAll("button, a"))
+        .find((element) => /add or switch accounts/i.test(
+          normalizeAccountText(element.textContent || element.getAttribute("aria-label") || "")
+        ));
+
+      if (switchButton) {
+        clickElementLikeUser(switchButton);
+      }
+
+      const start = Date.now();
+      while (Date.now() - start < 2500) {
+        const accountLinks = getAccountLinks();
+        if (accountLinks.length > 1 && accountLinks.some(isVisibleElement)) {
+          return document.querySelector("#ybarAccountMenuBody");
+        }
+        await deps.sleep(100);
+      }
+
+      return document.querySelector("#ybarAccountMenuBody");
+    }
+
+    function closeAccountMenu() {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+
+    async function ensureAccountSwitcherOpen() {
+      const menuBody = await openAccountMenu();
+      return revealAccountSwitcher(menuBody);
+    }
+
+    function getActiveAccount() {
+      const email = getActiveEmail();
+      if (!email) return makeAccount("yahoo:current", "Current Yahoo account", window.location.href);
+      return makeAccount(`yahoo:${email}`, email, window.location.href);
+    }
+
+    function canAutoSwitch() {
+      return getAccountLinks().length > 1;
+    }
+
+    async function discoverAccounts() {
+      if (!isProvider()) return [];
+
+      let accounts = getAccountsFromDom();
+      if (accounts.length > 1) {
+        closeAccountMenu();
+        return accounts;
+      }
+
+      await ensureAccountSwitcherOpen();
+      accounts = getAccountsFromDom();
+      closeAccountMenu();
+
+      if (accounts.length <= 1) {
+        deps.log("Yahoo account switch failed: account must already be signed in and visible in account menu.", "warn");
+      }
+
+      return accounts.length ? accounts : [getActiveAccount()];
+    }
+
+    function accountMatchesLink(account, link) {
+      const linkAccount = makeAccountFromLink(link);
+      if (!linkAccount) return false;
+
+      const targetId = account?.id || "";
+      const targetEmail = extractEmail(`${account?.id || ""} ${account?.label || ""} ${account?.url || ""}`);
+
+      return (
+        linkAccount.id === targetId ||
+        (targetEmail && linkAccount.id === `yahoo:${targetEmail}`) ||
+        (account?.url && link.href === account.url)
+      );
+    }
+
+    async function switchAccount(account) {
+      if (!isProvider()) return { ok: false, error: "Yahoo account switching is only available in Yahoo Mail." };
+
+      await ensureAccountSwitcherOpen();
+      const target = getAccountLinks().find((link) => accountMatchesLink(account, link));
+
+      if (!target) {
+        deps.log("Yahoo account switch failed: account must already be signed in and visible in account menu.", "warn");
+        closeAccountMenu();
+        return {
+          ok: false,
+          error: "Yahoo account switch failed: account must already be signed in and visible in account menu.",
+        };
+      }
+
+      window.setTimeout(() => clickElementLikeUser(target), 50);
+      return { ok: true, provider: "yahoo", navigating: true };
+    }
+
     function findFolderControl(folder = "inbox") {
       const folderId = getFolderId(folder);
       const folderLabel = getFolderLabel(folder);
@@ -440,6 +656,10 @@
 
     return {
       isProvider,
+      discoverAccounts,
+      switchAccount,
+      getActiveAccount,
+      canAutoSwitch,
       getMailboxUrl,
       navigateMailbox,
       emailLooksSafe,

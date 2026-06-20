@@ -77,6 +77,316 @@
         .toLowerCase();
     }
 
+    function normalizeAccountText(value = "") {
+      return String(value).replace(/\s+/g, " ").trim();
+    }
+
+    function extractEmail(value = "") {
+      const match = String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      return match ? match[0].toLowerCase() : null;
+    }
+
+    function getOutlookLoginHintUrl(email) {
+      return email ? `https://outlook.live.com/mail/?login_hint=${encodeURIComponent(email)}` : "";
+    }
+
+    function extractEmailFromUrl(value = "") {
+      try {
+        const url = new URL(value, window.location.href);
+        return extractEmail(url.searchParams.get("login_hint")) ||
+          extractEmail(url.searchParams.get("username"));
+      } catch (error) {
+        return extractEmail(value);
+      }
+    }
+
+    function extractAccountEmail(account = {}) {
+      return extractEmail(`${account.id || ""} ${account.label || ""} ${account.elementHint || ""}`) ||
+        extractEmailFromUrl(account.url || "");
+    }
+
+    function getSafeSwitchUrl(account = {}, email = "") {
+      try {
+        const url = new URL(account.url || "", window.location.href);
+        if (url.hostname === "outlook.live.com" && url.pathname.startsWith("/mail")) {
+          return url.href;
+        }
+      } catch (error) {
+        // Fall through to the generated Outlook URL.
+      }
+
+      return getOutlookLoginHintUrl(email);
+    }
+
+    function makeAccount(id, label, elementHint = "", url = "") {
+      return {
+        id,
+        label,
+        provider: "outlook",
+        switchMethod: "provider",
+        elementHint,
+        url,
+      };
+    }
+
+    function uniqueAccounts(accounts) {
+      const seen = new Set();
+      return accounts.filter((account) => {
+        if (!account?.id || seen.has(account.id)) return false;
+        seen.add(account.id);
+        return true;
+      });
+    }
+
+    function getActiveEmail() {
+      const currentSecondary = document.querySelector("#mectrl_currentAccount_secondary");
+      const currentEmail = extractEmail(currentSecondary?.textContent || currentSecondary?.getAttribute("aria-label") || "");
+      if (currentEmail && isVisibleElement(currentSecondary)) return currentEmail;
+
+      const mailboxRoot = Array.from(document.querySelectorAll('[id^="primaryMailboxRoot_"][title]'))
+        .find((element) => isVisibleElement(element) && extractEmail(element.getAttribute("title") || ""));
+      const mailboxEmail = extractEmail(mailboxRoot?.getAttribute("title") || "");
+      if (mailboxEmail) return mailboxEmail;
+
+      const currentLinks = [
+        document.querySelector("#mectrl_currentAccount_picture"),
+        document.querySelector("#mectrl_viewAccount"),
+      ];
+      for (const link of currentLinks) {
+        const linkEmail = extractEmailFromUrl(link?.href || link?.getAttribute?.("href") || "");
+        if (linkEmail) return linkEmail;
+      }
+
+      const urlEmail = extractEmailFromUrl(window.location.href);
+      if (urlEmail) return urlEmail;
+
+      const profileButton = getProfileButton();
+      const profileLabel = normalizeAccountText(
+        profileButton?.getAttribute("aria-label") ||
+        profileButton?.getAttribute("title") ||
+        profileButton?.textContent ||
+        ""
+      );
+      return extractEmail(profileLabel) || extractEmail(document.title);
+    }
+
+    function getProfileButton() {
+      const selectors = [
+        "#mectrl_main_trigger",
+        "#owa-me-control-container button",
+        "#owa-me-control-container [role='button']",
+        "#O365_MainLink_MePhoto",
+        '[data-testid="O365_MainLink_MePhoto"]',
+        '[data-automationid="O365_MainLink_MePhoto"]',
+        'button[aria-label*="Account manager" i]',
+        '[aria-label*="Account manager" i]',
+        'button[title*="Account manager" i]',
+        'button[aria-label*="My account" i]',
+        'button[aria-label*="Profile" i]',
+        'button[aria-label*="user account" i]',
+      ];
+
+      for (const selector of selectors) {
+        const button = Array.from(document.querySelectorAll(selector))
+          .map((element) => element.closest?.("button, [role='button']") || element)
+          .find(isVisibleElement);
+        if (button) return button;
+      }
+
+      return Array.from(document.querySelectorAll("button, [role='button'], [aria-label], [title]"))
+        .find((element) => {
+          if (!isVisibleElement(element)) return false;
+          const label = getElementLabel(element);
+          return label.includes("account") && (label.includes("@") || label.includes("profile") || label.includes("manager"));
+        }) || null;
+    }
+
+    function getAccountMenuRoots() {
+      const meControlBody = document.querySelector("#mectrl_main_body");
+      if (isVisibleElement(meControlBody)) return [meControlBody];
+
+      const roots = Array.from(document.querySelectorAll([
+        "#mectrl_main_body",
+        '[id*="mectrl"][role="dialog"]',
+        '[role="dialog"]',
+        '[aria-modal="true"]',
+        '[data-testid*="account" i]',
+        '[data-automationid*="account" i]',
+        '[id*="O365" i]',
+        '[class*="account" i]',
+      ].join(","))).filter((element) => {
+        if (!isVisibleElement(element)) return false;
+        const text = normalizeAccountText(element.innerText || element.textContent || "");
+        return /@/.test(text) || /sign out|account|switch/i.test(text);
+      });
+
+      return roots;
+    }
+
+    function getAccountElements() {
+      const roots = getAccountMenuRoots();
+      const elements = [];
+
+      roots.forEach((root) => {
+        elements.push(...Array.from(root.querySelectorAll([
+          'a[id^="mectrl_rememberedAccount_"][id$="_switch"]',
+          'a[href*="login_hint="]',
+          "button",
+          "a",
+          "[role='button']",
+          "[role='menuitem']",
+        ].join(","))));
+      });
+
+      return [...new Set(elements)].filter((element) => {
+        if (!isVisibleElement(element)) return false;
+
+        const label = normalizeAccountText(
+          element.getAttribute("aria-label") ||
+          element.getAttribute("title") ||
+          element.textContent ||
+          element.href ||
+          ""
+        );
+        const lower = label.toLowerCase();
+        const href = element.href || element.getAttribute("href") || "";
+        const email = extractEmail(label) || extractEmailFromUrl(href);
+
+        return Boolean(email) &&
+          !lower.includes("current account") &&
+          !lower.includes("sign out") &&
+          !lower.includes("sign in with a different account") &&
+          !lower.includes("remove") &&
+          !lower.includes("privacy") &&
+          !lower.includes("terms");
+      });
+    }
+
+    function makeAccountFromElement(element) {
+      const label = normalizeAccountText(
+        element.getAttribute("aria-label") ||
+        element.getAttribute("title") ||
+        element.textContent ||
+          ""
+      );
+      const href = element.href || element.getAttribute("href") || "";
+      const email = extractEmail(label) || extractEmailFromUrl(href);
+      if (!email) return null;
+
+      return makeAccount(`outlook:${email}`, label || email, label, href || getOutlookLoginHintUrl(email));
+    }
+
+    function getAccountsFromDom() {
+      const accounts = [];
+      const activeEmail = getActiveEmail();
+
+      if (activeEmail) {
+        accounts.push(makeAccount(
+          `outlook:${activeEmail}`,
+          activeEmail,
+          activeEmail,
+          getOutlookLoginHintUrl(activeEmail)
+        ));
+      }
+
+      getAccountElements().forEach((element) => {
+        const account = makeAccountFromElement(element);
+        if (account) accounts.push(account);
+      });
+
+      return uniqueAccounts(accounts);
+    }
+
+    async function openAccountMenu() {
+      const button = getProfileButton();
+      if (!button) return null;
+
+      clickElementLikeUser(button);
+
+      const start = Date.now();
+      while (Date.now() - start < 3500) {
+        const roots = getAccountMenuRoots();
+        if (roots.some((root) => root !== document.body)) return roots[0];
+        if (getAccountElements().length > 0) return document.body;
+        await deps.sleep(150);
+      }
+
+      return null;
+    }
+
+    function closeAccountMenu() {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+
+    function getActiveAccount() {
+      const email = getActiveEmail();
+      if (!email) return makeAccount("outlook:current", "Current Outlook account", window.location.href);
+      return makeAccount(`outlook:${email}`, email, email, getOutlookLoginHintUrl(email));
+    }
+
+    function canAutoSwitch() {
+      return getAccountElements().length > 1;
+    }
+
+    async function discoverAccounts() {
+      if (!isProvider()) return [];
+
+      await openAccountMenu();
+      const accounts = getAccountsFromDom();
+      closeAccountMenu();
+
+      if (accounts.length <= 1) {
+        deps.log("Outlook account switch failed: account must already be signed in and visible in account menu.", "warn");
+      }
+
+      return accounts.length ? accounts : [getActiveAccount()];
+    }
+
+    function accountMatchesElement(account, element) {
+      const elementAccount = makeAccountFromElement(element);
+      if (!elementAccount) return false;
+
+      const targetEmail = extractAccountEmail(account);
+
+      return (
+        elementAccount.id === account?.id ||
+        (targetEmail && elementAccount.id === `outlook:${targetEmail}`)
+      );
+    }
+
+    async function switchAccount(account) {
+      if (!isProvider()) return { ok: false, error: "Outlook account switching is only available in Outlook Mail." };
+
+      await openAccountMenu();
+      const target = getAccountElements().find((element) => accountMatchesElement(account, element));
+
+      if (target) {
+        window.setTimeout(() => clickElementLikeUser(target), 50);
+        return { ok: true, provider: "outlook", navigating: true };
+      }
+
+      const targetEmail = extractAccountEmail(account);
+      if (targetEmail) {
+        closeAccountMenu();
+        window.setTimeout(() => {
+          window.location.assign(getSafeSwitchUrl(account, targetEmail));
+        }, 50);
+        return { ok: true, provider: "outlook", navigating: true };
+      }
+
+      deps.log("Outlook account switch failed: account must already be signed in and visible in account menu.", "warn");
+      closeAccountMenu();
+      return {
+        ok: false,
+        error: "Outlook account switch failed: account must already be signed in and visible in account menu.",
+      };
+    }
+
     function findFolderControl(folder = "inbox") {
       const folderLabels = getFolderLabels(folder);
       const hrefMatches = folder === "spam"
@@ -206,8 +516,13 @@
 
       return findVisibleButtonByText([
         "it's not junk",
+        "it is not junk",
+        "this isn't junk",
+        "this is not junk",
         "not junk",
+        "not a junk",
         "not spam",
+        "not a spam",
         "not phishing",
         "mark as not junk",
         "mark as not spam",
@@ -227,14 +542,33 @@
       return visibleMatches.find((button) => button.getBoundingClientRect().top < 260) || visibleMatches[0] || null;
     }
 
+    function getReportButton() {
+      const candidates = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], [aria-label], [title]'));
+      const visibleMatches = candidates.filter((button) => {
+        if (!isVisibleEnabledButton(button)) return false;
+        const label = getElementLabel(button);
+        return label === "report" || label.includes("report junk") || label.includes("report phishing");
+      });
+
+      return visibleMatches.find((button) => button.getBoundingClientRect().top < 260) || visibleMatches[0] || null;
+    }
+
     async function findNotJunkButtonWithMenu() {
       let notJunkButton = getNotJunkButton();
       if (notJunkButton) return notJunkButton;
 
       const moreButton = getMoreButton();
-      if (!moreButton) return null;
+      if (moreButton) {
+        clickElementLikeUser(moreButton);
+        await deps.sleep(600);
+        notJunkButton = getNotJunkButton();
+        if (notJunkButton) return notJunkButton;
+      }
 
-      clickElementLikeUser(moreButton);
+      const reportButton = getReportButton();
+      if (!reportButton) return null;
+
+      clickElementLikeUser(reportButton);
       await deps.sleep(600);
       notJunkButton = getNotJunkButton();
 
@@ -399,6 +733,108 @@
       ]);
     }
 
+    function getOpenedRowIdFromUrl() {
+      const match = window.location.href.match(/\/id\/([^?#]+)/i);
+      if (!match) return "";
+
+      try {
+        return decodeURIComponent(match[1]);
+      } catch (error) {
+        return match[1];
+      }
+    }
+
+    function findOpenedMessageRow(rowId = "") {
+      const openedRowId = rowId || getOpenedRowIdFromUrl();
+      const rows = getVisibleMessageRows();
+
+      if (openedRowId) {
+        const exactRow = rows.find((row) => deps.getEmailRowId(row) === openedRowId);
+        if (exactRow) return exactRow;
+      }
+
+      return rows.find((row) => row.getAttribute("aria-selected") === "true") || null;
+    }
+
+    function rowLooksUnread(row) {
+      if (!row) return false;
+
+      const aria = row.getAttribute("aria-label") || "";
+      if (/\bunread\b/i.test(aria)) return true;
+
+      return Boolean(getMarkAsReadButton(row));
+    }
+
+    function getMarkAsReadButton(row) {
+      if (!row) return null;
+
+      const candidates = Array.from(row.querySelectorAll('button, [role="button"], [title], [aria-label]'));
+      return candidates.find((candidate) => {
+        if (!isVisibleEnabledButton(candidate)) return false;
+        const label = getElementLabel(candidate);
+        return label.includes("mark as read");
+      }) || null;
+    }
+
+    function getReadUnreadToolbarButton() {
+      return Array.from(document.querySelectorAll('button, [role="button"]')).find((button) => {
+        if (!isVisibleEnabledButton(button)) return false;
+        const label = getElementLabel(button);
+        return label.includes("read / unread");
+      }) || null;
+    }
+
+    async function waitForRowRead(rowId, row, maxWait = 5000) {
+      const start = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        const currentRow = row && document.contains(row)
+          ? row
+          : findOpenedMessageRow(rowId);
+
+        if (currentRow && !rowLooksUnread(currentRow)) {
+          return true;
+        }
+
+        if (deps.getState() === "stopped") return false;
+        await deps.sleep(300);
+      }
+
+      return false;
+    }
+
+    async function markOpenedEmailRead(rowId = "") {
+      if (!isProvider()) return false;
+
+      const row = findOpenedMessageRow(rowId);
+      if (!row) {
+        deps.log("Outlook opened row not found for mark-as-read.", "warn");
+        return false;
+      }
+
+      if (!rowLooksUnread(row)) {
+        deps.log("Outlook email is already marked read.", "info");
+        return true;
+      }
+
+      const markReadButton = getMarkAsReadButton(row) || getReadUnreadToolbarButton();
+      if (!markReadButton) {
+        deps.log("Outlook Mark as read button not found.", "warn");
+        return false;
+      }
+
+      clickElementLikeUser(markReadButton);
+
+      const markedRead = await waitForRowRead(rowId, row);
+      if (markedRead) {
+        deps.log("Outlook email marked read.", "success");
+      } else {
+        deps.log("Outlook email still appears unread after marking read.", "warn");
+      }
+
+      return markedRead;
+    }
+
     function getMovedSpamRowsVisibleInInbox() {
       if (!isProvider() || movedSpamEmailQueue.size === 0) return [];
 
@@ -460,6 +896,10 @@
 
     return {
       isProvider,
+      discoverAccounts,
+      switchAccount,
+      getActiveAccount,
+      canAutoSwitch,
       getMailboxUrl,
       navigateMailbox,
       emailLooksSafe,
@@ -467,6 +907,7 @@
       forgetMovedSpamEmail,
       getMovedSpamRowsVisibleInInbox,
       moveOpenedSpamEmailToInbox,
+      markOpenedEmailRead,
       clearMovedSpamQueue,
       hasMovedSpamQueue,
       getMovedSpamQueueSize,

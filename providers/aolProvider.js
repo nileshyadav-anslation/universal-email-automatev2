@@ -155,6 +155,241 @@
       return true;
     }
 
+    function normalizeAccountText(value = "") {
+      return String(value).replace(/\s+/g, " ").trim();
+    }
+
+    function extractEmail(value = "") {
+      const match = String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      return match ? match[0].toLowerCase() : null;
+    }
+
+    function makeAccount(id, label, url = null) {
+      return {
+        id,
+        label,
+        provider: "aol",
+        switchMethod: "provider",
+        url,
+      };
+    }
+
+    function uniqueAccounts(accounts) {
+      const seen = new Set();
+      return accounts.filter((account) => {
+        if (!account?.id || seen.has(account.id)) return false;
+        seen.add(account.id);
+        return true;
+      });
+    }
+
+    function getActiveEmail() {
+      const titleEmail = extractEmail(document.title);
+      if (titleEmail) return titleEmail;
+
+      const accountButton = getAccountButton();
+      const accountLabel = accountButton?.getAttribute("aria-label") || accountButton?.getAttribute("title") || "";
+      const labelEmail = extractEmail(accountLabel);
+      if (labelEmail) return labelEmail;
+
+      const loginMatch = accountLabel.match(/\(([^)@\s]+)\)/);
+      if (loginMatch) return `${loginMatch[1].toLowerCase()}@aol.com`;
+
+      return null;
+    }
+
+    function getEmailFromSwitchUrl(url = "") {
+      try {
+        const parsed = new URL(url, window.location.href);
+        const login = parsed.searchParams.get("login");
+        if (login && login.includes("@")) return login.toLowerCase();
+        if (login) return `${login.toLowerCase()}@aol.com`;
+      } catch (error) {
+        return null;
+      }
+
+      return null;
+    }
+
+    function getAccountButton() {
+      const selectors = [
+        "#ybarAccountMenu",
+        "#ybarAccountMenuOpener",
+        "#ybarAccountProfile",
+        "#ybarAccountProfile button",
+        '[aria-controls="ybarAccountMenuBody"]',
+        '[aria-label*="AOL accounts" i]',
+        '[aria-label*="account" i]',
+        '[title*="account" i]',
+      ];
+
+      for (const selector of selectors) {
+        const button = Array.from(document.querySelectorAll(selector))
+          .map((element) => element.closest?.("button, [role='button']") || element)
+          .find(isElementVisible);
+        if (button) return button;
+      }
+
+      return null;
+    }
+
+    function makeAccountFromLink(link) {
+      const href = link?.href || "";
+      const label = normalizeAccountText(
+        link?.getAttribute("aria-label") ||
+        link?.getAttribute("title") ||
+        link?.textContent ||
+        ""
+      );
+      const email = getEmailFromSwitchUrl(href) || extractEmail(label);
+
+      if (!email) return null;
+
+      return makeAccount(`aol:${email}`, label || email, href);
+    }
+
+    function getAccountLinks() {
+      return Array.from(document.querySelectorAll([
+        '#ybarAccountMenuBody a[href*="login.aol.com/"][href*="login="]',
+        '#ybarAccountMenuBody a[href*="login.yahoo.com/"][href*="login="]',
+        '#ybarAccountMenuBody a[data-ylk*="acct-switch"]',
+        '#ybarAccountMenuBody a[aria-label*="@"]',
+      ].join(","))).filter(isElementVisible);
+    }
+
+    function getAccountsFromDom() {
+      const accounts = [];
+      const activeEmail = getActiveEmail();
+
+      if (activeEmail) {
+        accounts.push(makeAccount(`aol:${activeEmail}`, activeEmail, window.location.href));
+      }
+
+      getAccountLinks().forEach((link) => {
+        const account = makeAccountFromLink(link);
+        if (account) accounts.push(account);
+      });
+
+      return uniqueAccounts(accounts);
+    }
+
+    async function openAccountMenu() {
+      let body = document.querySelector("#ybarAccountMenuBody");
+      if (isElementVisible(body)) return body;
+
+      const button = getAccountButton();
+      if (!button) return null;
+
+      const clickTargets = [
+        button,
+        document.querySelector("#ybarAccountMenuOpener"),
+        document.querySelector("#ybarAccountProfile"),
+      ].filter(isElementVisible);
+
+      for (const target of clickTargets) {
+        clickLikeUser(target);
+        await deps.sleep(250);
+        body = document.querySelector("#ybarAccountMenuBody");
+        if (isElementVisible(body)) return body;
+      }
+
+      const start = Date.now();
+      while (Date.now() - start < 3000) {
+        body = document.querySelector("#ybarAccountMenuBody");
+        if (isElementVisible(body)) return body;
+        if (getAccountLinks().length > 0) return document.body;
+        await deps.sleep(150);
+      }
+
+      return null;
+    }
+
+    async function revealAccountSwitcher(body) {
+      if (!body) return null;
+
+      const switchButton = Array.from(body.querySelectorAll("button, a"))
+        .find((element) => /add or switch accounts|switch accounts|manage accounts/i.test(
+          normalizeAccountText(element.textContent || element.getAttribute("aria-label") || "")
+        ));
+
+      if (switchButton) {
+        clickLikeUser(switchButton);
+        await deps.sleep(900);
+      }
+
+      return document.querySelector("#ybarAccountMenuBody") || document.body;
+    }
+
+    function closeAccountMenu() {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+
+    async function ensureAccountSwitcherOpen() {
+      const menuBody = await openAccountMenu();
+      return revealAccountSwitcher(menuBody);
+    }
+
+    function getActiveAccount() {
+      const email = getActiveEmail();
+      if (!email) return makeAccount("aol:current", "Current AOL account", window.location.href);
+      return makeAccount(`aol:${email}`, email, window.location.href);
+    }
+
+    function canAutoSwitch() {
+      return getAccountLinks().length > 1;
+    }
+
+    async function discoverAccounts() {
+      if (!isProvider()) return [];
+
+      await ensureAccountSwitcherOpen();
+      const accounts = getAccountsFromDom();
+      closeAccountMenu();
+
+      if (accounts.length <= 1) {
+        deps.log("AOL requires manual login for this account. Please sign in manually, then restart automation.", "warn");
+      }
+
+      return accounts.length ? accounts : [getActiveAccount()];
+    }
+
+    function accountMatchesLink(account, link) {
+      const linkAccount = makeAccountFromLink(link);
+      if (!linkAccount) return false;
+
+      const targetEmail = extractEmail(`${account?.id || ""} ${account?.label || ""} ${account?.url || ""}`);
+
+      return (
+        linkAccount.id === account?.id ||
+        (targetEmail && linkAccount.id === `aol:${targetEmail}`) ||
+        (account?.url && link.href === account.url)
+      );
+    }
+
+    async function switchAccount(account) {
+      if (!isProvider()) return { ok: false, error: "AOL account switching is only available in AOL Mail." };
+
+      await ensureAccountSwitcherOpen();
+      const target = getAccountLinks().find((link) => accountMatchesLink(account, link));
+
+      if (!target) {
+        deps.log("AOL requires manual login for this account. Please sign in manually, then restart automation.", "warn");
+        closeAccountMenu();
+        return {
+          ok: false,
+          error: "AOL requires manual login for this account. Please sign in manually, then restart automation.",
+        };
+      }
+
+      window.setTimeout(() => clickLikeUser(target), 50);
+      return { ok: true, provider: "aol", navigating: true };
+    }
+
     async function clickBackToListIfVisible() {
       const backButton = getBackButton();
       if (!isEnabledControl(backButton)) return false;
@@ -347,19 +582,22 @@
     }
 
     async function findMoveButton() {
-      let button = getNotSpamButton();
+      let button = getRestoreToInboxButton();
+      if (button) return { button, label: "Restore to Inbox" };
+
+      button = getNotSpamButton();
       if (button) return { button, label: "Not Spam" };
 
       const moreButton = getMoreButton();
       if (moreButton) {
         clickLikeUser(moreButton);
         await deps.sleep(700);
+        button = getRestoreToInboxButton();
+        if (button) return { button, label: "Restore to Inbox" };
+
         button = getNotSpamButton();
         if (button) return { button, label: "Not Spam" };
       }
-
-      button = getRestoreToInboxButton();
-      if (button) return { button, label: "Restore to Inbox" };
 
       return { button: null, label: "" };
     }
@@ -408,7 +646,23 @@
       return false;
     }
 
-    async function waitForMovedFromSpam(maxWait = 15000) {
+    function hasVisibleSpamRow(rowId = "") {
+      if (!rowId) return false;
+
+      return getVisibleRows().some((row) => deps.getEmailRowId(row) === rowId);
+    }
+
+    async function confirmMovedAfterBack(rowId = "") {
+      await clickBackToListIfVisible();
+      const returned = await waitForMailbox("spam", 8000);
+      const onSpamList = isInMailbox("spam") && !isElementVisible(getBackButton());
+
+      if (!onSpamList && getMessageViewElement()) return false;
+      if (!rowId) return returned || onSpamList;
+      return !hasVisibleSpamRow(rowId);
+    }
+
+    async function waitForMovedFromSpam(rowId = "", maxWait = 15000) {
       const startUrl = window.location.href;
       const start = Date.now();
       const hadMessageView = Boolean(getMessageViewElement());
@@ -420,7 +674,9 @@
         }
 
         if (hadMessageView && !getMessageViewElement()) {
-          return "message view disappeared";
+          if (!rowId || !hasVisibleSpamRow(rowId)) {
+            return "message view disappeared and row left Spam";
+          }
         }
 
         const backButtonStillVisible = isElementVisible(getBackButton());
@@ -430,15 +686,15 @@
           /\/d\/folders\/6\/?$/i.test(window.location.pathname);
 
         if (returnedToList) {
-          return "back button disappeared and spam list rows are visible";
+          if (!rowId || !hasVisibleSpamRow(rowId)) {
+            return "back button disappeared and row left Spam";
+          }
         }
 
         if (urlReturnedToSpamList) {
-          return "URL returned to /d/folders/6";
-        }
-
-        if (!isNotSpamButtonVisible()) {
-          return "Not Spam button no longer visible";
+          if (!rowId || !hasVisibleSpamRow(rowId)) {
+            return "URL returned to /d/folders/6 and row left Spam";
+          }
         }
 
         if (deps.getState() === "stopped") return false;
@@ -572,7 +828,7 @@
       });
     }
 
-    async function moveOpenedSpamEmailToInbox() {
+    async function moveOpenedSpamEmailToInbox(rowId = "") {
       if (!isProvider()) return false;
 
       const { button, label } = await findMoveButton();
@@ -586,9 +842,7 @@
         return false;
       }
 
-      if (label === "Not Spam") {
-        deps.log("AOL Not Spam button found", "info");
-      }
+      deps.log(`AOL ${label} button found`, "info");
       deps.log(`Moving safe AOL Spam email to Inbox using ${label}...`, "info");
       const clicked = await clickToolbarControl(button);
       if (!clicked) {
@@ -596,24 +850,20 @@
         return false;
       }
 
-      if (label === "Not Spam") {
-        await deps.sleep(2000);
-      }
-
       deps.log("AOL waiting for move confirmation", "info");
-      const moved = await waitForMovedFromSpam(16000);
-      if (!moved && label !== "Restore to Inbox") {
-        const restoreButton = getRestoreToInboxButton();
-        if (restoreButton) {
-          deps.log("AOL Not Spam did not complete. Trying Restore to Inbox...", "warn");
-          await clickToolbarControl(restoreButton);
+      const moved = await waitForMovedFromSpam(rowId, 18000);
+      if (!moved && label !== "Not Spam") {
+        const notSpamButton = getNotSpamButton();
+        if (notSpamButton) {
+          deps.log("AOL Restore to Inbox did not complete. Trying Not Spam...", "warn");
+          await clickToolbarControl(notSpamButton);
           deps.log("AOL waiting for move confirmation", "info");
-          const restored = await waitForMovedFromSpam(16000);
-          if (restored) {
-            deps.log(`AOL move confirmed by ${restored}`, "success");
-            return true;
+          const notSpamMoved = await waitForMovedFromSpam(rowId, 18000);
+          if (notSpamMoved) {
+            deps.log(`AOL move confirmed by ${notSpamMoved}`, "success");
+            return confirmMovedAfterBack(rowId);
           }
-          return false;
+          return confirmMovedAfterBack(rowId);
         }
       }
 
@@ -622,13 +872,75 @@
           deps.log("AOL move failed: button still visible after wait", "warn");
         }
         deps.log(`Could not confirm AOL moved this Spam email to Inbox after ${label}.`, "warn");
-        return false;
+        return confirmMovedAfterBack(rowId);
       }
 
       deps.log(`AOL move confirmed by ${moved}`, "success");
-      await clickBackToListIfVisible();
+      const confirmedAfterBack = await confirmMovedAfterBack(rowId);
+      if (!confirmedAfterBack) {
+        deps.log("AOL move looked successful, but the row is still visible in Spam.", "warn");
+        return false;
+      }
       deps.log("Confirmed safe AOL Spam email moved to Inbox.", "success");
       return true;
+    }
+
+    function getMarkAsReadButton() {
+      const selectors = [
+        'button[data-test-id="icon-btn-read"]',
+        'button[title="Mark as read"]',
+        'button[aria-label*="not read" i]',
+      ];
+
+      const candidates = Array.from(document.querySelectorAll(selectors.join(",")))
+        .map((element) => element.closest?.("button") || element);
+
+      return candidates.find((button) => {
+        if (!isEnabledControl(button)) return false;
+
+        const label = controlText(button);
+        return (
+          label.includes("mark as read") ||
+          label.includes("message is not read") ||
+          label.includes("not read")
+        );
+      }) || null;
+    }
+
+    async function waitForOpenedMessageRead(maxWait = 5000) {
+      const start = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        if (!getMarkAsReadButton()) {
+          return true;
+        }
+
+        if (deps.getState() === "stopped") return false;
+        await deps.sleep(300);
+      }
+
+      return false;
+    }
+
+    async function markOpenedEmailRead() {
+      if (!isProvider()) return false;
+
+      const markReadButton = getMarkAsReadButton();
+      if (!markReadButton) {
+        deps.log("AOL email is already marked read.", "info");
+        return true;
+      }
+
+      clickExactButtonLikeUser(markReadButton);
+
+      const markedRead = await waitForOpenedMessageRead();
+      if (markedRead) {
+        deps.log("AOL email marked read.", "success");
+      } else {
+        deps.log("AOL email still appears unread after marking read.", "warn");
+      }
+
+      return markedRead;
     }
 
     function clearMovedSpamQueue() {
@@ -652,6 +964,10 @@
 
     return {
       isProvider,
+      discoverAccounts,
+      switchAccount,
+      getActiveAccount,
+      canAutoSwitch,
       getMailboxUrl,
       navigateMailbox,
       emailLooksSafe,
@@ -659,6 +975,7 @@
       forgetMovedSpamEmail,
       getMovedSpamRowsVisibleInInbox,
       moveOpenedSpamEmailToInbox,
+      markOpenedEmailRead,
       clearMovedSpamQueue,
       hasMovedSpamQueue,
       getMovedSpamQueueSize,

@@ -111,6 +111,8 @@ let savedAutomationTemplates = [];
 let runtimeInterval = null;
 let runtimeSeconds  = 0;
 let currentState    = 'idle'; // idle | running | paused | stopped
+const ACTIVITY_LOG_KEY = 'activityLogEntries';
+const MAX_ACTIVITY_LOG_ENTRIES = 200;
 
 //  Helpers 
 function formatTime(s) {
@@ -119,24 +121,60 @@ function formatTime(s) {
   return `${m}:${sec.toString().padStart(2,'0')}`;
 }
 
-function log(msg, type = 'info') {
+function formatLogTime(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  return `${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+}
+
+function renderLogEntry(msg, type = 'info', timestamp = Date.now()) {
   logEmpty.style.display = 'none';
   const entry = document.createElement('div');
   entry.className = `log-entry ${type}`;
-  const now = new Date();
-  const t = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
   const time = document.createElement('span');
   time.className = 'log-time';
-  time.textContent = t;
+  time.textContent = formatLogTime(timestamp);
   const message = document.createElement('span');
   message.className = 'log-msg';
   message.textContent = msg;
   entry.append(time, message);
   logScroll.prepend(entry);
-  // Trim log to 30 entries
-  while (logScroll.children.length > 31) {
+  while (logScroll.children.length > 61) {
     logScroll.removeChild(logScroll.lastChild);
   }
+}
+
+function persistLogEntry(msg, type = 'info') {
+  chrome.storage.local.get([ACTIVITY_LOG_KEY], (data) => {
+    const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
+    entries.push({
+      message: String(msg),
+      level: type,
+      time: Date.now()
+    });
+
+    chrome.storage.local.set({
+      [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
+    });
+  });
+}
+
+function log(msg, type = 'info', options = {}) {
+  renderLogEntry(msg, type, options.time || Date.now());
+  if (options.persist !== false) {
+    persistLogEntry(msg, type);
+  }
+}
+
+function loadActivityLogs() {
+  chrome.storage.local.get([ACTIVITY_LOG_KEY], (data) => {
+    const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
+    if (!entries.length) return;
+
+    logScroll.innerHTML = '';
+    entries.slice(-60).forEach((entry) => {
+      renderLogEntry(entry.message, entry.level || 'info', entry.time || Date.now());
+    });
+  });
 }
 
 function setStatus(state, label) {
@@ -554,6 +592,10 @@ async function ensureContentScript(tabId) {
       'linkProcessor.js',
       'replyEngine.js',
       'processedEmailManager.js',
+      'providers/gmailProvider.js',
+      'providers/yahooProvider.js',
+      'providers/aolProvider.js',
+      'providers/outlookProvider.js',
       'content.js'
     ]
   });
@@ -692,7 +734,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'EMAIL_OPENED') {
     const count = msg.count || 0;
     updateStat(statOpened, count);
-    log(`Opened: ${msg.subject || 'Email #' + count}`, 'success');
+    log(`Opened: ${msg.subject || 'Email #' + count}`, 'success', { persist: false });
     chrome.storage.local.set({ emailsOpened: count });
   }
 
@@ -707,18 +749,19 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 
   if (msg.type === 'ERROR') {
-    log('Error: ' + msg.message, 'error');
+    log('Error: ' + msg.message, 'error', { persist: false });
   }
 
   if (msg.type === 'LOG') {
-    log(msg.message, msg.level || 'info');
+    log(msg.message, msg.level || 'info', { persist: false });
   }
 });
 
 //  Init 
 document.addEventListener('DOMContentLoaded', async () => {
+  loadActivityLogs();
   loadSettings();
   await checkGmailAndShowAlert();
   setStatus('idle', 'Idle');
-  log('Extension ready. Choose a provider and click Start.', 'info');
+  log('Extension ready. Choose a provider and click Start.', 'info', { persist: false });
 });

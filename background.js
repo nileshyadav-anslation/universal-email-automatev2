@@ -2,7 +2,9 @@
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-06-16-outlook-selectors-v1';
+const CONTENT_SCRIPT_VERSION = '2026-06-18-no-reply-all-v1';
+const ACTIVITY_LOG_KEY = 'activityLogEntries';
+const MAX_ACTIVITY_LOG_ENTRIES = 200;
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
@@ -91,6 +93,22 @@ function delay(ms) {
 
 function getStorage(keys) {
   return new Promise(resolve => chrome.storage.local.get(keys, resolve));
+}
+
+async function addActivityLogEntry(message, level = 'info') {
+  if (!message) return;
+
+  const data = await getStorage([ACTIVITY_LOG_KEY]);
+  const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
+  entries.push({
+    message: String(message),
+    level,
+    time: Date.now()
+  });
+
+  await chrome.storage.local.set({
+    [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
+  });
 }
 
 async function getMailTab(provider = 'gmail') {
@@ -239,7 +257,139 @@ function getSwitchUrl(account) {
   }
 }
 
+function getAccountProvider(account) {
+  if (account?.provider) return account.provider;
+  const id = account?.id || '';
+  const match = id.match(/^([^:]+):/);
+  return match ? match[1] : '';
+}
+
+function usesProviderContentSwitch(account) {
+  const provider = getAccountProvider(account);
+  return account?.switchMethod === 'provider' || ['yahoo', 'outlook', 'aol'].includes(provider);
+}
+
+function getProviderLoginFailure(provider) {
+  if (provider === 'yahoo') {
+    return 'Yahoo account switch failed: account must already be signed in and visible in account menu.';
+  }
+  if (provider === 'outlook') {
+    return 'Outlook account switch failed: account must already be signed in and visible in account menu.';
+  }
+  if (provider === 'aol') {
+    return 'AOL requires manual login for this account. Please sign in manually, then restart automation.';
+  }
+  return 'Inbox did not finish loading after account switch';
+}
+
+function isProviderLoginUrl(url = '', provider = '') {
+  if (provider === 'yahoo') return url.includes('login.yahoo.com');
+  if (provider === 'outlook') return url.includes('login.live.com') || url.includes('login.microsoftonline.com');
+  if (provider === 'aol') return url.includes('login.aol.com') || url.includes('login.yahoo.com');
+  return false;
+}
+
+function logAccountSwitchFailure(message) {
+  chrome.runtime.sendMessage({
+    type: 'LOG',
+    message,
+    level: 'warn'
+  }).catch(() => {});
+  addActivityLogEntry(message, 'warn').catch(() => {});
+}
+
+async function waitForProviderSwitchResult(tabId, provider, expectedAccount, timeout = 60000) {
+  const start = Date.now();
+  const initialTab = await chrome.tabs.get(tabId).catch(() => null);
+  const initialUrl = initialTab?.url || '';
+  const initialTitle = initialTab?.title || '';
+  let sawTransition = false;
+
+  while (Date.now() - start < timeout) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const changedPage =
+      tab?.url !== initialUrl ||
+      tab?.title !== initialTitle ||
+      tab?.status === 'loading';
+
+    if (changedPage) {
+      sawTransition = true;
+    }
+
+    if (tab?.url && isProviderUrl(tab.url, provider) && tab.status === 'complete' && sawTransition) {
+      if (expectedAccount?.id) {
+        const verification = await chrome.tabs.sendMessage(tabId, {
+          action: 'GET_ACTIVE_ACCOUNT'
+        }).catch(() => null);
+
+        if (!verification?.currentAccount?.id || verification.currentAccount.id === expectedAccount.id) {
+          return { ok: true };
+        }
+      } else {
+        return { ok: true };
+      }
+    }
+
+    if (tab?.url && isProviderLoginUrl(tab.url, provider) && Date.now() - start > 8000) {
+      return { ok: false, error: getProviderLoginFailure(provider) };
+    }
+
+    await delay(500);
+  }
+
+  return { ok: false, error: getProviderLoginFailure(provider) };
+}
+
 async function switchMailAccount(tabId, account, settings) {
+  const provider = getAccountProvider(account);
+
+  if (usesProviderContentSwitch(account)) {
+    await ensureAutomationScripts(tabId);
+
+    const result = await chrome.tabs.sendMessage(tabId, {
+      action: 'SWITCH_PROVIDER_ACCOUNT',
+      account
+    }).catch(error => ({ ok: false, error: error.message }));
+
+    if (!result || !result.ok) {
+      return { ok: false, error: result?.error || 'Provider account switch failed' };
+    }
+
+    await delay(1200);
+    const loaded = await waitForProviderSwitchResult(tabId, provider, account, 60000);
+
+    if (!loaded.ok) {
+      logAccountSwitchFailure(loaded.error);
+      return { ok: false, error: loaded.error };
+    }
+
+    await delay(1500);
+
+    try {
+      await chrome.tabs.sendMessage(tabId, { action: 'PING' });
+    } catch (error) {
+      await ensureAutomationScripts(tabId);
+    }
+
+    await delay(700);
+
+    const storedState = await getStorage(['automationState']);
+    if (storedState.automationState === 'stopped') {
+      return { ok: true, stopped: true };
+    }
+
+    await chrome.tabs.sendMessage(tabId, { action: 'START', settings });
+
+    chrome.runtime.sendMessage({
+      type: 'LOG',
+      message: `Switched to ${account.label || account.id}`,
+      level: 'success'
+    }).catch(() => {});
+    addActivityLogEntry(`Switched to ${account.label || account.id}`, 'success').catch(() => {});
+
+    return { ok: true };
+  }
+
   const url = getSwitchUrl(account);
 
   if (!url) {
@@ -275,12 +425,30 @@ async function switchMailAccount(tabId, account, settings) {
     message: `Switched to ${account.label || account.id}`,
     level: 'success'
   }).catch(() => {});
+  addActivityLogEntry(`Switched to ${account.label || account.id}`, 'success').catch(() => {});
 
   return { ok: true };
 }
 
 // Relay messages from content scripts to popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'LOG') {
+    addActivityLogEntry(message.message, message.level || 'info').catch(() => {});
+  }
+
+  if (message.type === 'ERROR') {
+    addActivityLogEntry(`Error: ${message.message}`, 'error').catch(() => {});
+  }
+
+  if (message.type === 'EMAIL_OPENED') {
+    const count = message.count || 0;
+    addActivityLogEntry(`Opened: ${message.subject || 'Email #' + count}`, 'success').catch(() => {});
+  }
+
+  if (message.type === 'DONE') {
+    addActivityLogEntry('All unread emails processed ✓', 'success').catch(() => {});
+  }
+
   if (message.action === 'START_AUTOMATION') {
     startAutomationFromBackground(message.settings || {})
       .then(sendResponse)
@@ -328,8 +496,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // If message is from a content script (has sender.tab), relay to popup
-  if (sender.tab) {
+  // If message is from a content script (has sender.tab), relay only command-style
+  // messages. Status/log messages with a `type` already go directly to the popup.
+  if (sender.tab && !message.type) {
     // Forward to popup
     chrome.runtime.sendMessage(message).catch(() => {
       // Popup may be closed — ignore
