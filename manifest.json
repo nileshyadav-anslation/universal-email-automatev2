@@ -1,19 +1,25 @@
 {
   "manifest_version": 3,
   "name": "Email Read Automate",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Automatically open, read, and process unread emails with templates, retry handling, account switching, and safe automation.",
   "permissions": [
     "activeTab",
+    "proxy",
     "scripting",
     "storage",
-    "tabs"
+    "tabs",
+    "webRequest",
+    "webRequestAuthProvider"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://mail.google.com/*",
     "https://mail.yahoo.com/*",
     "https://mail.aol.com/*",
     "https://outlook.live.com/*",
+    "https://api.ipify.org/*",
+    "https://api64.ipify.org/*",
     "https://mail.proton.me/*",
     "https://mail.zoho.com/*"
   ],

@@ -265,6 +265,66 @@
 
       <div class="setting-row">
         <div class="setting-info">
+          <span class="setting-name">Enable Proxy Manager</span>
+          <span class="setting-desc">Apply assigned proxy before each account scan</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="proxyManagerToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Proxy Fallback</span>
+          <span class="setting-desc">Allow automation without proxy if assigned proxy fails</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="proxyFallbackToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row-stack proxy-manager-row">
+        <div class="setting-info">
+          <span class="setting-name">Proxy List</span>
+          <span class="setting-desc">Assign one proxy to one selected account</span>
+        </div>
+        <div class="proxy-form-grid">
+          <input type="text" id="proxyHostInput" class="batch-select" placeholder="Host" />
+          <input type="number" id="proxyPortInput" class="batch-select" placeholder="Port" min="1" max="65535" />
+          <input type="text" id="proxyUsernameInput" class="batch-select" placeholder="Username" />
+          <input type="password" id="proxyPasswordInput" class="batch-select" placeholder="Password" />
+          <input type="text" id="proxyCountryInput" class="batch-select" placeholder="Country" />
+          <input type="text" id="proxyCityInput" class="batch-select" placeholder="City" />
+          <select id="proxyTypeSelect" class="batch-select">
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="socks4">SOCKS4</option>
+            <option value="residential">Residential</option>
+            <option value="datacenter">Datacenter</option>
+          </select>
+          <select id="proxyAssignedToSelect" class="batch-select">
+            <option value="">Assign account</option>
+          </select>
+        </div>
+        <button class="btn settings-action" id="btnAddProxy">Add Proxy</button>
+        <div class="proxy-list" id="proxyList">
+          <div class="account-empty">No proxies added yet.</div>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
           <span class="setting-name">Enable Link Opening</span>
           <span class="setting-desc">Open safe links found in emails</span>
         </div>
@@ -367,10 +427,11 @@
     </div>
 
     <footer class="footer">
-      <span>Email Read Automate v1.0.0(v3)</span>
+      <span>Email Read Automate v1.0.0(v2)</span>
     </footer>
   </div>
 
+  <script src="proxyStorage.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

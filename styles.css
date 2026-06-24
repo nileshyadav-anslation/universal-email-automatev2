@@ -448,6 +448,99 @@ textarea {
   font-weight: 550;
 }
 
+.proxy-manager-row {
+  gap: 10px;
+}
+
+.proxy-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.proxy-form-grid .batch-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.proxy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.proxy-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
+}
+
+.proxy-card-head,
+.proxy-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.proxy-card-title {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.proxy-card-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.proxy-status {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.proxy-status-online {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.proxy-status-offline,
+.proxy-status-auth-failed {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.proxy-status-disabled {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #64748b;
+}
+
+.proxy-card-actions .btn {
+  min-height: 30px;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
 .val-badge {
   min-width: 34px;
   padding: 3px 8px;

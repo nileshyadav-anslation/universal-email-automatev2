@@ -1,8 +1,20 @@
 // background.js — Email Read Automate (Service Worker)
 
+try {
+  importScripts(
+    'proxyStorage.js',
+    'proxyAuth.js',
+    'proxyHealthChecker.js',
+    'proxyController.js',
+    'proxyManager.js'
+  );
+} catch (error) {
+  console.error('[Proxy] Failed to load proxy modules', error);
+}
+
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-06-18-no-reply-all-v1';
+const CONTENT_SCRIPT_VERSION = '2026-06-23-proxy-state-fix-v1';
 const ACTIVITY_LOG_KEY = 'activityLogEntries';
 const MAX_ACTIVITY_LOG_ENTRIES = 200;
 
@@ -95,6 +107,10 @@ function getStorage(keys) {
   return new Promise(resolve => chrome.storage.local.get(keys, resolve));
 }
 
+async function setAutomationState(automationState, values = {}) {
+  await chrome.storage.local.set({ ...values, automationState });
+}
+
 async function addActivityLogEntry(message, level = 'info') {
   if (!message) return;
 
@@ -109,6 +125,125 @@ async function addActivityLogEntry(message, level = 'info') {
   await chrome.storage.local.set({
     [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
   });
+}
+
+async function logProxyEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({
+    type: 'LOG',
+    message,
+    level
+  }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+function isProxyManagerAvailable() {
+  return Boolean(globalThis.ProxyManager && globalThis.ProxyStorage);
+}
+
+async function getInitialProxyAccount(settings = {}) {
+  const selectedAccounts = Array.isArray(settings.selectedAccounts) ? settings.selectedAccounts : [];
+  const currentIndex = Number.isFinite(settings.currentAccountIndex) ? settings.currentAccountIndex : 0;
+  const accountId = selectedAccounts[currentIndex] || selectedAccounts[0] || '';
+
+  if (!accountId) return null;
+
+  const data = await getStorage(['discoveredAccounts']);
+  const discoveredAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
+  return discoveredAccounts.find(account => account.id === accountId) || {
+    id: accountId,
+    label: accountId,
+    provider: settings.selectedProvider || ''
+  };
+}
+
+async function getActiveAccountFromTab(tabId) {
+  const response = await chrome.tabs.sendMessage(tabId, {
+    action: 'GET_ACTIVE_ACCOUNT'
+  }).catch(() => null);
+
+  return response?.currentAccount || null;
+}
+
+async function prepareProxyForAccount(account, settings = {}) {
+  if (!settings.enableProxyManager) {
+    return { ok: true, skipped: true };
+  }
+
+  if (!isProxyManagerAvailable()) {
+    return {
+      ok: false,
+      proxyFailed: true,
+      stopAutomation: true,
+      error: 'Proxy Manager is not available'
+    };
+  }
+
+  if (!account?.id) {
+    const error = 'Proxy Manager could not detect the account before automation';
+    if (settings.allowProxyFallback) {
+      await logProxyEvent(`[Proxy] ${error}. Fallback without proxy is enabled.`, 'warn');
+      return { ok: true, fallback: true };
+    }
+
+    await logProxyEvent('[Proxy] Proxy failed', 'error');
+    return {
+      ok: false,
+      proxyFailed: true,
+      stopAutomation: true,
+      error
+    };
+  }
+
+  return globalThis.ProxyManager.applyForAccount(account, {
+    allowFallback: Boolean(settings.allowProxyFallback),
+    log: logProxyEvent
+  });
+}
+
+async function clearProxyForStop() {
+  if (!isProxyManagerAvailable()) return;
+
+  await globalThis.ProxyManager.clearProxy().catch(error => {
+    console.warn('[Proxy] Proxy clear failed', error);
+  });
+}
+
+async function getLiveAutomationStates() {
+  const tabs = await chrome.tabs.query({});
+  const mailTabs = tabs.filter(tab => tab.id && tab.url && isMailUrl(tab.url));
+
+  const states = await Promise.all(mailTabs.map(async tab => {
+    const response = await chrome.tabs
+      .sendMessage(tab.id, { action: 'GET_AUTOMATION_STATE' })
+      .catch(() => null);
+
+    if (!response || !response.ok) return null;
+    return { tabId: tab.id, state: response.state || 'idle' };
+  }));
+
+  return states.filter(Boolean);
+}
+
+async function isAutomationSessionActive() {
+  const data = await getStorage(['automationState']);
+  const liveStates = await getLiveAutomationStates();
+  const activeState = liveStates.find(item => item.state === 'running' || item.state === 'paused')?.state;
+
+  if (activeState) {
+    if (data.automationState !== activeState) {
+      await setAutomationState(activeState);
+    }
+
+    return true;
+  }
+
+  if (data.automationState === 'running' || data.automationState === 'paused') {
+    await setAutomationState('idle');
+  }
+
+  return false;
 }
 
 async function getMailTab(provider = 'gmail') {
@@ -143,14 +278,48 @@ async function getOrCreateMailTab(provider = 'gmail') {
 
 async function startAutomationFromBackground(settings = {}) {
   const selectedProvider = settings.selectedProvider || 'gmail';
+  let proxyPreparedBeforeOpen = false;
+
+  if (settings.enableProxyManager) {
+    const initialProxyAccount = await getInitialProxyAccount(settings);
+    if (initialProxyAccount?.id) {
+      const proxyResult = await prepareProxyForAccount(initialProxyAccount, settings);
+      if (!proxyResult.ok) {
+        throw new Error(proxyResult.error || 'Proxy failed');
+      }
+      proxyPreparedBeforeOpen = Boolean(proxyResult.applied);
+    }
+  }
+
   const tab = await getOrCreateMailTab(selectedProvider);
+
+  if (proxyPreparedBeforeOpen) {
+    await chrome.tabs.reload(tab.id);
+    await waitForTabComplete(tab.id, 60000);
+    await delay(2500);
+  }
 
   await ensureAutomationScripts(tab.id).catch(async () => {
     await delay(1000);
     await ensureAutomationScripts(tab.id);
   });
 
-  await chrome.storage.local.set({ automationState: 'running', settings });
+  if (settings.enableProxyManager && !proxyPreparedBeforeOpen) {
+    const activeAccount = await getActiveAccountFromTab(tab.id);
+    const proxyResult = await prepareProxyForAccount(activeAccount, settings);
+    if (!proxyResult.ok) {
+      throw new Error(proxyResult.error || 'Proxy failed');
+    }
+
+    if (proxyResult.applied) {
+      await chrome.tabs.reload(tab.id);
+      await waitForTabComplete(tab.id, 60000);
+      await delay(2500);
+      await ensureAutomationScripts(tab.id);
+    }
+  }
+
+  await setAutomationState('running', { settings });
   await delay(500);
 
   const response = await chrome.tabs.sendMessage(tab.id, { action: 'START', settings });
@@ -342,6 +511,11 @@ async function waitForProviderSwitchResult(tabId, provider, expectedAccount, tim
 
 async function switchMailAccount(tabId, account, settings) {
   const provider = getAccountProvider(account);
+  const proxyResult = await prepareProxyForAccount(account, settings || {});
+
+  if (!proxyResult.ok) {
+    return proxyResult;
+  }
 
   if (usesProviderContentSwitch(account)) {
     await ensureAutomationScripts(tabId);
@@ -438,6 +612,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'ERROR') {
     addActivityLogEntry(`Error: ${message.message}`, 'error').catch(() => {});
+    setAutomationState('idle').catch(() => {});
+    clearProxyForStop().catch(() => {});
   }
 
   if (message.type === 'EMAIL_OPENED') {
@@ -446,13 +622,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'DONE') {
+    setAutomationState('idle').catch(() => {});
+    clearProxyForStop().catch(() => {});
     addActivityLogEntry('All unread emails processed ✓', 'success').catch(() => {});
   }
 
   if (message.action === 'START_AUTOMATION') {
     startAutomationFromBackground(message.settings || {})
       .then(sendResponse)
-      .catch(error => sendResponse({ ok: false, error: error.message }));
+      .catch(async error => {
+        await setAutomationState('idle').catch(() => {});
+        await clearProxyForStop();
+        sendResponse({ ok: false, error: error.message });
+      });
 
     return true;
   }
@@ -496,6 +678,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'TEST_PROXY') {
+    isAutomationSessionActive()
+      .then(active => {
+        if (active) {
+          return { ok: false, error: 'Stop automation before testing proxies.' };
+        }
+
+        if (!isProxyManagerAvailable()) {
+          return { ok: false, error: 'Proxy Manager is not available' };
+        }
+
+        return globalThis.ProxyManager.testProxy(message.proxyId);
+      })
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'CLEAR_PROXY') {
+    clearProxyForStop()
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   // If message is from a content script (has sender.tab), relay only command-style
   // messages. Status/log messages with a `type` already go directly to the popup.
   if (sender.tab && !message.type) {
@@ -528,8 +737,16 @@ chrome.runtime.onInstalled.addListener(details => {
       enableProcessedTracking: true,
       reprocessingMode: 'never',
       enableAccountSwitching: false,
+      enableProxyManager: false,
+      allowProxyFallback: false,
       selectedAccounts: [],
       discoveredAccounts: [],
+      proxyConfigs: [],
+      accountProxyMap: {},
+      proxySettings: {
+        enabled: false,
+        allowFallback: false
+      },
       replyTemplates: [],
       automationTemplates: [],
       selectedAutomationTemplate: '',

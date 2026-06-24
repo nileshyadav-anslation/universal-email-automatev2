@@ -29,6 +29,18 @@ const enableAccountSwitchingToggle = $('enableAccountSwitchingToggle');
 const accountSelectionRow = $('accountSelectionRow');
 const accountList = $('accountList');
 const btnRefreshAccounts = $('btnRefreshAccounts');
+const proxyManagerToggle = $('proxyManagerToggle');
+const proxyFallbackToggle = $('proxyFallbackToggle');
+const proxyHostInput = $('proxyHostInput');
+const proxyPortInput = $('proxyPortInput');
+const proxyUsernameInput = $('proxyUsernameInput');
+const proxyPasswordInput = $('proxyPasswordInput');
+const proxyCountryInput = $('proxyCountryInput');
+const proxyCityInput = $('proxyCityInput');
+const proxyTypeSelect = $('proxyTypeSelect');
+const proxyAssignedToSelect = $('proxyAssignedToSelect');
+const btnAddProxy = $('btnAddProxy');
+const proxyList = $('proxyList');
 const enableLinkOpeningToggle = $('enableLinkOpeningToggle');
 const maxLinksPerEmailInput = $('maxLinksPerEmailInput');
 const enableAutoReplyToggle = $('enableAutoReplyToggle');
@@ -58,6 +70,8 @@ const DEFAULT_SETTINGS = {
   enableProcessedTracking: true,
   reprocessingMode: 'never',
   enableAccountSwitching: false,
+  enableProxyManager: false,
+  allowProxyFallback: false,
   selectedAccounts: []
 };
 
@@ -106,6 +120,7 @@ const BUILT_IN_AUTOMATION_TEMPLATES = [
 ];
 
 let savedAutomationTemplates = [];
+let knownAccounts = [];
 
 
 let runtimeInterval = null;
@@ -163,6 +178,19 @@ function log(msg, type = 'info', options = {}) {
   if (options.persist !== false) {
     persistLogEntry(msg, type);
   }
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      resolve(response || { ok: false, error: 'No response from background' });
+    });
+  });
 }
 
 function loadActivityLogs() {
@@ -271,6 +299,20 @@ enableAccountSwitchingToggle.addEventListener('change', async () => {
     await refreshAccounts();
   }
 });
+proxyManagerToggle.addEventListener('change', async () => {
+  saveSettings();
+
+  if (!proxyManagerToggle.checked) {
+    const result = await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
+    if (result.ok) {
+      log('Proxy cleared because Proxy Manager is disabled.', 'success');
+    } else {
+      log(`Proxy clear failed: ${result.error || 'Unknown error'}`, 'error');
+    }
+  }
+});
+proxyFallbackToggle.addEventListener('change', saveSettings);
+btnAddProxy.addEventListener('click', addProxyFromForm);
 reprocessingModeSelect.addEventListener('change', () => {
   if (reprocessingModeSelect.value === 'unread') {
     log('Warning: Reprocess If Marked Unread may process the same email multiple times.', 'warn');
@@ -304,6 +346,8 @@ function getAutomationTemplateSettingsSnapshot() {
     'enableProcessedTracking',
     'reprocessingMode',
     'enableAccountSwitching',
+    'enableProxyManager',
+    'allowProxyFallback',
     'selectedAccounts'
   ];
 
@@ -380,6 +424,8 @@ function applySettingsToControls(templateSettings = {}) {
   enableProcessedTrackingToggle.checked = Boolean(merged.enableProcessedTracking);
   reprocessingModeSelect.value = merged.reprocessingMode || DEFAULT_SETTINGS.reprocessingMode;
   enableAccountSwitchingToggle.checked = Boolean(merged.enableAccountSwitching);
+  proxyManagerToggle.checked = Boolean(merged.enableProxyManager);
+  proxyFallbackToggle.checked = Boolean(merged.allowProxyFallback);
   accountSelectionRow.style.display = enableAccountSwitchingToggle.checked ? 'flex' : 'none';
 
   if (Array.isArray(merged.selectedAccounts)) {
@@ -470,12 +516,22 @@ function getCurrentSettings() {
     enableProcessedTracking: enableProcessedTrackingToggle.checked,
     reprocessingMode: reprocessingModeSelect.value || DEFAULT_SETTINGS.reprocessingMode,
     enableAccountSwitching: enableAccountSwitchingToggle.checked,
+    enableProxyManager: proxyManagerToggle.checked,
+    allowProxyFallback: proxyFallbackToggle.checked,
     selectedAccounts: getSelectedAccounts()
   };
 }
 
 function saveSettings() {
-  chrome.storage.local.set(getCurrentSettings());
+  const settings = getCurrentSettings();
+  chrome.storage.local.set(settings);
+
+  if (window.ProxyStorage) {
+    window.ProxyStorage.saveProxySettings({
+      enabled: settings.enableProxyManager,
+      allowFallback: settings.allowProxyFallback,
+    }).catch(error => log(`Proxy settings save failed: ${error.message}`, 'error'));
+  }
 }
 
 function loadSettings() {
@@ -496,8 +552,13 @@ function loadSettings() {
     'enableProcessedTracking',
     'reprocessingMode',
     'enableAccountSwitching',
+    'enableProxyManager',
+    'allowProxyFallback',
     'selectedAccounts',
     'discoveredAccounts',
+    'proxySettings',
+    'proxyConfigs',
+    'accountProxyMap',
     'replyTemplates',
     'automationTemplates',
     'selectedAutomationTemplate'
@@ -531,6 +592,13 @@ function loadSettings() {
     enableAutoReplyToggle.checked = data.enableAutoReply !== undefined ? data.enableAutoReply : DEFAULT_SETTINGS.enableAutoReply;
     enableProcessedTrackingToggle.checked = data.enableProcessedTracking !== undefined ? data.enableProcessedTracking : DEFAULT_SETTINGS.enableProcessedTracking;
     enableAccountSwitchingToggle.checked = data.enableAccountSwitching !== undefined ? data.enableAccountSwitching : DEFAULT_SETTINGS.enableAccountSwitching;
+    const proxySettings = data.proxySettings || {};
+    proxyManagerToggle.checked = proxySettings.enabled !== undefined
+      ? Boolean(proxySettings.enabled)
+      : (data.enableProxyManager !== undefined ? Boolean(data.enableProxyManager) : DEFAULT_SETTINGS.enableProxyManager);
+    proxyFallbackToggle.checked = proxySettings.allowFallback !== undefined
+      ? Boolean(proxySettings.allowFallback)
+      : (data.allowProxyFallback !== undefined ? Boolean(data.allowProxyFallback) : DEFAULT_SETTINGS.allowProxyFallback);
     accountSelectionRow.style.display = enableAccountSwitchingToggle.checked ? 'flex' : 'none';
     renderAccounts(Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [], Array.isArray(data.selectedAccounts) ? data.selectedAccounts : []);
     reprocessingModeSelect.value = data.reprocessingMode || DEFAULT_SETTINGS.reprocessingMode;
@@ -543,6 +611,15 @@ function loadSettings() {
       automationTemplateSelect.value = data.selectedAutomationTemplate;
       updateAutomationTemplateButtons();
     }
+
+    if (window.ProxyStorage && !data.proxySettings) {
+      window.ProxyStorage.saveProxySettings({
+        enabled: proxyManagerToggle.checked,
+        allowFallback: proxyFallbackToggle.checked,
+      }).finally(loadProxyManagerUi);
+    } else {
+      loadProxyManagerUi();
+    }
   });
 }
 
@@ -552,6 +629,7 @@ function getSelectedAccounts() {
 }
 
 function renderAccounts(accounts, selectedAccounts = []) {
+  setKnownAccounts(accounts);
   accountList.innerHTML = '';
 
   if (!accounts.length) {
@@ -580,6 +658,285 @@ function renderAccounts(accounts, selectedAccounts = []) {
     label.append(checkbox, text);
     accountList.appendChild(label);
   });
+}
+
+function getAssignableProxyAccounts(extraAccountId = '') {
+  const accountMap = new Map();
+
+  knownAccounts.forEach((account) => {
+    if (account?.id) {
+      accountMap.set(account.id, {
+        id: account.id,
+        label: account.label || account.id,
+      });
+    }
+  });
+
+  if (extraAccountId && !accountMap.has(extraAccountId)) {
+    accountMap.set(extraAccountId, {
+      id: extraAccountId,
+      label: extraAccountId,
+    });
+  }
+
+  return Array.from(accountMap.values());
+}
+
+function setKnownAccounts(accounts = []) {
+  knownAccounts = Array.isArray(accounts) ? accounts.filter(account => account?.id) : [];
+  populateProxyAccountOptions();
+}
+
+function populateProxyAccountOptions(selectedValue = proxyAssignedToSelect.value) {
+  proxyAssignedToSelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Assign account';
+  proxyAssignedToSelect.appendChild(placeholder);
+
+  getAssignableProxyAccounts(selectedValue).forEach((account) => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.label;
+    proxyAssignedToSelect.appendChild(option);
+  });
+
+  proxyAssignedToSelect.value = selectedValue || '';
+}
+
+function getAssignedAccountForProxy(proxy, accountProxyMap = {}) {
+  return proxy.assignedTo || Object.keys(accountProxyMap).find(accountId => accountProxyMap[accountId] === proxy.id) || '';
+}
+
+function getProxyStatus(proxy) {
+  if (proxy.enabled === false) return 'Disabled';
+  return proxy.status || 'Untested';
+}
+
+function getProxyStatusClass(status) {
+  return `proxy-status-${String(status || 'Untested').toLowerCase().replace(/\s+/g, '-')}`;
+}
+
+function clearProxyForm() {
+  proxyHostInput.value = '';
+  proxyPortInput.value = '';
+  proxyUsernameInput.value = '';
+  proxyPasswordInput.value = '';
+  proxyCountryInput.value = '';
+  proxyCityInput.value = '';
+  proxyTypeSelect.value = 'http';
+  proxyAssignedToSelect.value = '';
+}
+
+function getProxyFormData() {
+  const host = proxyHostInput.value.trim();
+  const port = parseInt(proxyPortInput.value, 10);
+
+  if (!host || !Number.isFinite(port)) {
+    log('Enter proxy host and port before saving.', 'warn');
+    return null;
+  }
+
+  return {
+    host,
+    port,
+    username: proxyUsernameInput.value.trim(),
+    password: proxyPasswordInput.value,
+    country: proxyCountryInput.value.trim(),
+    city: proxyCityInput.value.trim(),
+    type: proxyTypeSelect.value || 'http',
+    status: 'Untested',
+    assignedTo: proxyAssignedToSelect.value || '',
+    lastCheck: '',
+    latency: '',
+    lastKnownIp: '',
+    enabled: true,
+  };
+}
+
+async function addProxyFromForm() {
+  if (!window.ProxyStorage) {
+    log('Proxy storage is not available.', 'error');
+    return;
+  }
+
+  const proxy = getProxyFormData();
+  if (!proxy) return;
+
+  await window.ProxyStorage.upsertProxy(proxy);
+  clearProxyForm();
+  await loadProxyManagerUi();
+  saveSettings();
+  log('Proxy saved.', 'success');
+}
+
+function createProxyAssignmentSelect(proxy, assignedAccountId, accountProxyMap) {
+  const select = document.createElement('select');
+  select.className = 'batch-select';
+
+  const empty = document.createElement('option');
+  empty.value = '';
+  empty.textContent = 'Unassigned';
+  select.appendChild(empty);
+
+  getAssignableProxyAccounts(assignedAccountId).forEach((account) => {
+    const option = document.createElement('option');
+    option.value = account.id;
+    option.textContent = account.label;
+    select.appendChild(option);
+  });
+
+  select.value = assignedAccountId || '';
+  select.addEventListener('change', async () => {
+    await updateProxyAssignment(proxy, select.value, getAssignedAccountForProxy(proxy, accountProxyMap));
+  });
+
+  return select;
+}
+
+function renderProxyList(proxies = [], accountProxyMap = {}) {
+  proxyList.innerHTML = '';
+
+  if (!proxies.length) {
+    const empty = document.createElement('div');
+    empty.className = 'account-empty';
+    empty.textContent = 'No proxies added yet.';
+    proxyList.appendChild(empty);
+    return;
+  }
+
+  proxies.forEach((proxy) => {
+    const assignedAccountId = getAssignedAccountForProxy(proxy, accountProxyMap);
+    const status = getProxyStatus(proxy);
+    const card = document.createElement('div');
+    card.className = 'proxy-card';
+
+    const head = document.createElement('div');
+    head.className = 'proxy-card-head';
+
+    const title = document.createElement('div');
+    title.className = 'proxy-card-title';
+    title.textContent = `${proxy.host}:${proxy.port}`;
+
+    const badge = document.createElement('span');
+    badge.className = `proxy-status ${getProxyStatusClass(status)}`;
+    badge.textContent = status;
+    head.append(title, badge);
+
+    const meta = document.createElement('div');
+    meta.className = 'proxy-card-meta';
+    const location = [proxy.city, proxy.country].filter(Boolean).join(', ') || 'Location not set';
+    const lastIp = proxy.lastKnownIp ? `IP ${proxy.lastKnownIp}` : 'IP unverified';
+    const latency = proxy.latency ? `Latency ${proxy.latency}` : 'Latency unknown';
+    meta.textContent = `${proxy.type || 'http'} | ${location} | ${lastIp} | ${latency}`;
+
+    const assignment = createProxyAssignmentSelect(proxy, assignedAccountId, accountProxyMap);
+
+    const actions = document.createElement('div');
+    actions.className = 'proxy-card-actions';
+
+    const testButton = document.createElement('button');
+    testButton.className = 'btn settings-action';
+    testButton.textContent = 'Test';
+    testButton.addEventListener('click', () => testProxy(proxy.id, testButton));
+
+    const toggleButton = document.createElement('button');
+    toggleButton.className = 'btn settings-action';
+    toggleButton.textContent = proxy.enabled === false ? 'Enable' : 'Disable';
+    toggleButton.addEventListener('click', () => toggleProxyEnabled(proxy));
+
+    const removeButton = document.createElement('button');
+    removeButton.className = 'btn settings-action danger';
+    removeButton.textContent = 'Remove';
+    removeButton.addEventListener('click', () => removeProxy(proxy.id));
+
+    actions.append(testButton, toggleButton, removeButton);
+    card.append(head, meta, assignment, actions);
+    proxyList.appendChild(card);
+  });
+}
+
+async function updateProxyAssignment(proxy, nextAccountId, previousAccountId) {
+  if (!window.ProxyStorage) return;
+
+  if (previousAccountId && previousAccountId !== nextAccountId) {
+    await window.ProxyStorage.setAccountProxyAssignment(previousAccountId, '');
+  }
+
+  if (nextAccountId) {
+    await window.ProxyStorage.setAccountProxyAssignment(nextAccountId, proxy.id);
+  } else {
+    await window.ProxyStorage.updateProxy(proxy.id, { assignedTo: '' });
+  }
+
+  await loadProxyManagerUi();
+  log(nextAccountId ? 'Proxy assignment updated.' : 'Proxy unassigned.', 'success');
+}
+
+async function toggleProxyEnabled(proxy) {
+  if (!window.ProxyStorage) return;
+  const willEnable = proxy.enabled === false;
+
+  await window.ProxyStorage.updateProxy(proxy.id, {
+    enabled: willEnable,
+  });
+
+  if (!willEnable && currentState !== 'running' && currentState !== 'paused') {
+    await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
+  }
+
+  await loadProxyManagerUi();
+  log(willEnable ? 'Proxy enabled.' : 'Proxy disabled.', 'success');
+}
+
+async function removeProxy(proxyId) {
+  if (!window.ProxyStorage) return;
+  await window.ProxyStorage.removeProxy(proxyId);
+
+  if (currentState !== 'running' && currentState !== 'paused') {
+    await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
+  }
+
+  await loadProxyManagerUi();
+  log('Proxy removed.', 'success');
+}
+
+async function testProxy(proxyId, button) {
+  button.disabled = true;
+  button.textContent = 'Testing';
+  log('Testing proxy...', 'info');
+
+  try {
+    const result = await sendRuntimeMessage({ action: 'TEST_PROXY', proxyId });
+    await loadProxyManagerUi();
+
+    if (result.ok) {
+      log(`Proxy online: ${result.ip || 'IP verified'}`, 'success');
+    } else {
+      log(`Proxy test failed: ${result.error || result.status || 'Unknown error'}`, 'error');
+    }
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = 'Test';
+    }
+  }
+}
+
+async function loadProxyManagerUi() {
+  if (!window.ProxyStorage) return;
+
+  const [proxySettings, proxies, accountProxyMap] = await Promise.all([
+    window.ProxyStorage.getProxySettings(),
+    window.ProxyStorage.getProxies(),
+    window.ProxyStorage.getAccountProxyMap(),
+  ]);
+
+  proxyManagerToggle.checked = Boolean(proxySettings.enabled);
+  proxyFallbackToggle.checked = Boolean(proxySettings.allowFallback);
+  populateProxyAccountOptions();
+  renderProxyList(proxies, accountProxyMap);
 }
 
 async function ensureContentScript(tabId) {
@@ -723,6 +1080,7 @@ btnStop.addEventListener('click', async () => {
   btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
   if (tab) chrome.tabs.sendMessage(tab.id, { action: 'STOP' });
   chrome.storage.local.set({ automationState: 'stopped' });
+  sendRuntimeMessage({ action: 'CLEAR_PROXY' }).catch(() => null);
   // Re-enable start after stopping
   setTimeout(() => {
     setStatus('idle', 'Idle');
@@ -744,11 +1102,14 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === 'DONE') {
     setStatus('idle', 'Idle');
+    chrome.storage.local.set({ automationState: 'idle' });
     log('All unread emails processed ✓', 'success');
     btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
   }
 
   if (msg.type === 'ERROR') {
+    setStatus('idle', 'Idle');
+    chrome.storage.local.set({ automationState: 'idle' });
     log('Error: ' + msg.message, 'error', { persist: false });
   }
 

@@ -3,10 +3,10 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-06-18-no-reply-all-v1";
+  const CONTENT_SCRIPT_VERSION = "2026-06-23-proxy-state-fix-v1";
 
   if (window.__emailReadAutomateContentLoaded) {
-    console.warn("[EmailReadAutomate] Duplicate content script ignored");
+    console.info("[EmailReadAutomate] Duplicate content script ignored");
     return;
   }
   window.__emailReadAutomateContentLoaded = true;
@@ -1508,6 +1508,11 @@ zoho: {
 
     if (!result || !result.ok) {
       log(`Account switching failed: ${result?.error || "Unknown error"}`, "error");
+      if (result?.stopAutomation) {
+        state = "stopped";
+        sendMsg("ERROR", { message: result.error || "Proxy failed before account automation" });
+        return true;
+      }
       return false;
     }
 
@@ -2631,7 +2636,10 @@ zoho: {
   //  Message Listener
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "START") {
-      if (state === "running") return;
+      if (state === "running") {
+        sendResponse({ ok: true, alreadyRunning: true, state });
+        return false;
+      }
       state = "running";
       emailsOpened = Number.isFinite(msg.settings?.sessionOpened) ? msg.settings.sessionOpened : 0;
       processedHrefs.clear();
@@ -2652,18 +2660,25 @@ zoho: {
         sendMsg("ERROR", { message: err.message });
       });
       sendResponse({ ok: true });
+      return false;
     }
 
     if (msg.action === "PAUSE") {
       state = "paused";
+      sendResponse({ ok: true, state });
+      return false;
     }
 
     if (msg.action === "RESUME") {
       state = "running";
+      sendResponse({ ok: true, state });
+      return false;
     }
 
     if (msg.action === "STOP") {
       state = "stopped";
+      sendResponse({ ok: true, state });
+      return false;
     }
 
     if (msg.action === "CLEAR_PROCESSED_CACHE") {
@@ -2688,6 +2703,11 @@ zoho: {
       return false;
     }
 
+    if (msg.action === "GET_AUTOMATION_STATE") {
+      sendResponse({ ok: true, state });
+      return false;
+    }
+
     if (msg.action === "SWITCH_PROVIDER_ACCOUNT") {
       const switchProvider = getAccountSwitchProvider();
       if (!switchProvider?.switchAccount) {
@@ -2703,6 +2723,7 @@ zoho: {
 
     if (msg.action === "PING") {
       sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION });
+      return false;
     }
   });
 
