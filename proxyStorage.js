@@ -4,6 +4,7 @@
   const PROXY_CONFIGS_KEY = "proxyConfigs";
   const ACCOUNT_PROXY_MAP_KEY = "accountProxyMap";
   const PROXY_SETTINGS_KEY = "proxySettings";
+  const MAX_PROXIES_PER_ACCOUNT = 3;
   const DEFAULT_PROXY_SETTINGS = {
     enabled: false,
     allowFallback: false,
@@ -25,6 +26,53 @@
 
   function makeProxyId() {
     return `proxy_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+  }
+
+  function normalizeProxyIdList(value) {
+    const rawIds = Array.isArray(value) ? value : (value ? [value] : []);
+    const seen = new Set();
+    const ids = [];
+
+    rawIds.forEach((item) => {
+      const id = String(item || "").trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      ids.push(id);
+    });
+
+    return ids.slice(0, MAX_PROXIES_PER_ACCOUNT);
+  }
+
+  function normalizeAccountProxyMap(map = {}) {
+    if (!map || typeof map !== "object") return {};
+
+    return Object.keys(map).reduce((normalized, accountId) => {
+      const safeAccountId = String(accountId || "").trim();
+      const ids = normalizeProxyIdList(map[accountId]);
+
+      if (safeAccountId && ids.length) {
+        normalized[safeAccountId] = ids;
+      }
+
+      return normalized;
+    }, {});
+  }
+
+  function removeProxyIdFromMap(map = {}, proxyId = "") {
+    const safeProxyId = String(proxyId || "").trim();
+    if (!safeProxyId) return normalizeAccountProxyMap(map);
+
+    const next = {};
+    const normalized = normalizeAccountProxyMap(map);
+
+    Object.keys(normalized).forEach((accountId) => {
+      const ids = normalized[accountId].filter((id) => id !== safeProxyId);
+      if (ids.length) {
+        next[accountId] = ids;
+      }
+    });
+
+    return next;
   }
 
   function normalizeProxy(proxy = {}) {
@@ -62,14 +110,13 @@
 
   async function getAccountProxyMap() {
     const data = await readStorage([ACCOUNT_PROXY_MAP_KEY]);
-    return data[ACCOUNT_PROXY_MAP_KEY] && typeof data[ACCOUNT_PROXY_MAP_KEY] === "object"
-      ? data[ACCOUNT_PROXY_MAP_KEY]
-      : {};
+    return normalizeAccountProxyMap(data[ACCOUNT_PROXY_MAP_KEY]);
   }
 
   async function saveAccountProxyMap(map) {
-    await writeStorage({ [ACCOUNT_PROXY_MAP_KEY]: map || {} });
-    return map || {};
+    const normalized = normalizeAccountProxyMap(map);
+    await writeStorage({ [ACCOUNT_PROXY_MAP_KEY]: normalized });
+    return normalized;
   }
 
   async function upsertProxy(proxy) {
@@ -83,10 +130,19 @@
     await saveProxies(next);
 
     if (normalized.assignedTo) {
-      await setAccountProxyAssignment(normalized.assignedTo, normalized.id);
+      const assignment = await setAccountProxyAssignment(normalized.assignedTo, normalized.id);
+      if (!assignment.ok) {
+        await updateProxy(normalized.id, { assignedTo: "" });
+        return {
+          ...normalized,
+          assignedTo: "",
+          assignmentError: assignment.error,
+        };
+      }
     }
 
-    return normalized;
+    const saved = await getProxies();
+    return saved.find((proxy) => proxy.id === normalized.id) || normalized;
   }
 
   async function updateProxy(proxyId, changes = {}) {
@@ -106,16 +162,11 @@
     const proxies = await getProxies();
     const next = proxies.filter((proxy) => proxy.id !== proxyId);
     const map = await getAccountProxyMap();
-
-    Object.keys(map).forEach((accountId) => {
-      if (map[accountId] === proxyId) {
-        delete map[accountId];
-      }
-    });
+    const nextMap = removeProxyIdFromMap(map, proxyId);
 
     await writeStorage({
       [PROXY_CONFIGS_KEY]: next,
-      [ACCOUNT_PROXY_MAP_KEY]: map,
+      [ACCOUNT_PROXY_MAP_KEY]: nextMap,
     });
 
     return next;
@@ -128,13 +179,39 @@
     const map = await getAccountProxyMap();
 
     if (!safeAccountId) {
-      return { proxies, map };
+      const nextMap = removeProxyIdFromMap(map, safeProxyId);
+      const next = proxies.map((proxy) => (
+        proxy.id === safeProxyId ? { ...proxy, assignedTo: "" } : proxy
+      ));
+
+      await writeStorage({
+        [PROXY_CONFIGS_KEY]: next,
+        [ACCOUNT_PROXY_MAP_KEY]: nextMap,
+      });
+
+      return { ok: true, proxies: next, map: nextMap };
     }
 
+    let nextMap = removeProxyIdFromMap(map, safeProxyId);
+
     if (!safeProxyId) {
-      delete map[safeAccountId];
+      delete nextMap[safeAccountId];
     } else {
-      map[safeAccountId] = safeProxyId;
+      const existingIds = normalizeProxyIdList(nextMap[safeAccountId]);
+      if (!existingIds.includes(safeProxyId)) {
+        if (existingIds.length >= MAX_PROXIES_PER_ACCOUNT) {
+          return {
+            ok: false,
+            error: `Maximum ${MAX_PROXIES_PER_ACCOUNT} proxies can be assigned to one account`,
+            proxies,
+            map,
+          };
+        }
+
+        existingIds.push(safeProxyId);
+      }
+
+      nextMap[safeAccountId] = existingIds;
     }
 
     const next = proxies.map((proxy) => {
@@ -142,7 +219,7 @@
         return { ...proxy, assignedTo: safeAccountId };
       }
 
-      if (proxy.assignedTo === safeAccountId) {
+      if (!safeProxyId && proxy.assignedTo === safeAccountId) {
         return { ...proxy, assignedTo: "" };
       }
 
@@ -151,25 +228,63 @@
 
     await writeStorage({
       [PROXY_CONFIGS_KEY]: next,
-      [ACCOUNT_PROXY_MAP_KEY]: map,
+      [ACCOUNT_PROXY_MAP_KEY]: nextMap,
     });
 
-    return { proxies: next, map };
+    return { ok: true, proxies: next, map: nextMap };
   }
 
-  async function getAssignedProxy(account) {
+  async function removeProxyAssignment(proxyId) {
+    const safeProxyId = String(proxyId || "").trim();
+    const proxies = await getProxies();
+    const map = await getAccountProxyMap();
+    const nextMap = removeProxyIdFromMap(map, safeProxyId);
+    const next = proxies.map((proxy) => (
+      proxy.id === safeProxyId ? { ...proxy, assignedTo: "" } : proxy
+    ));
+
+    await writeStorage({
+      [PROXY_CONFIGS_KEY]: next,
+      [ACCOUNT_PROXY_MAP_KEY]: nextMap,
+    });
+
+    return { ok: true, proxies: next, map: nextMap };
+  }
+
+  async function getAssignedProxies(account) {
     const accountId = typeof account === "string" ? account : account?.id;
-    if (!accountId) return null;
+    if (!accountId) return [];
 
     const [proxies, map] = await Promise.all([
       getProxies(),
       getAccountProxyMap(),
     ]);
 
-    const mappedProxyId = map[accountId];
-    return proxies.find((proxy) => proxy.id === mappedProxyId) ||
-      proxies.find((proxy) => proxy.assignedTo === accountId) ||
-      null;
+    const byId = new Map(proxies.map((proxy) => [proxy.id, proxy]));
+    const mappedProxyIds = normalizeProxyIdList(map[accountId]);
+    const assigned = [];
+
+    mappedProxyIds.forEach((proxyId) => {
+      const proxy = byId.get(proxyId);
+      if (proxy) assigned.push(proxy);
+    });
+
+    proxies.forEach((proxy) => {
+      if (
+        proxy.assignedTo === accountId &&
+        !assigned.some((item) => item.id === proxy.id) &&
+        assigned.length < MAX_PROXIES_PER_ACCOUNT
+      ) {
+        assigned.push(proxy);
+      }
+    });
+
+    return assigned.slice(0, MAX_PROXIES_PER_ACCOUNT);
+  }
+
+  async function getAssignedProxy(account) {
+    const proxies = await getAssignedProxies(account);
+    return proxies[0] || null;
   }
 
   async function getProxySettings() {
@@ -193,6 +308,7 @@
     PROXY_CONFIGS_KEY,
     ACCOUNT_PROXY_MAP_KEY,
     PROXY_SETTINGS_KEY,
+    MAX_PROXIES_PER_ACCOUNT,
     getProxies,
     saveProxies,
     upsertProxy,
@@ -201,6 +317,8 @@
     getAccountProxyMap,
     saveAccountProxyMap,
     setAccountProxyAssignment,
+    removeProxyAssignment,
+    getAssignedProxies,
     getAssignedProxy,
     getProxySettings,
     saveProxySettings,

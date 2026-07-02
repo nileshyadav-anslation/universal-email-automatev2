@@ -705,8 +705,49 @@ function populateProxyAccountOptions(selectedValue = proxyAssignedToSelect.value
   proxyAssignedToSelect.value = selectedValue || '';
 }
 
+function getMaxAccountProxies() {
+  return window.ProxyStorage?.MAX_PROXIES_PER_ACCOUNT || 3;
+}
+
+function normalizeProxyIdList(value) {
+  const rawIds = Array.isArray(value) ? value : (value ? [value] : []);
+  const seen = new Set();
+  const ids = [];
+
+  rawIds.forEach((item) => {
+    const id = String(item || '').trim();
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  });
+
+  return ids.slice(0, getMaxAccountProxies());
+}
+
+function getAccountProxyIds(accountProxyMap = {}, accountId = '') {
+  return normalizeProxyIdList(accountProxyMap[accountId]);
+}
+
 function getAssignedAccountForProxy(proxy, accountProxyMap = {}) {
-  return proxy.assignedTo || Object.keys(accountProxyMap).find(accountId => accountProxyMap[accountId] === proxy.id) || '';
+  return proxy.assignedTo ||
+    Object.keys(accountProxyMap).find(accountId => getAccountProxyIds(accountProxyMap, accountId).includes(proxy.id)) ||
+    '';
+}
+
+function getProxyAssignmentRank(proxy, assignedAccountId, accountProxyMap = {}) {
+  if (!assignedAccountId) return -1;
+  return getAccountProxyIds(accountProxyMap, assignedAccountId).indexOf(proxy.id);
+}
+
+function getProxyAssignmentLabel(rank) {
+  if (rank === 0) return 'Primary proxy';
+  if (rank === 1) return 'Backup proxy 1';
+  if (rank === 2) return 'Backup proxy 2';
+  return 'Assigned proxy';
+}
+
+function getProxyAccountLabel(accountId = '') {
+  return getAssignableProxyAccounts(accountId).find(account => account.id === accountId)?.label || accountId;
 }
 
 function getProxyStatus(proxy) {
@@ -764,10 +805,16 @@ async function addProxyFromForm() {
   const proxy = getProxyFormData();
   if (!proxy) return;
 
-  await window.ProxyStorage.upsertProxy(proxy);
+  const savedProxy = await window.ProxyStorage.upsertProxy(proxy);
   clearProxyForm();
   await loadProxyManagerUi();
   saveSettings();
+
+  if (savedProxy?.assignmentError) {
+    log(`Proxy saved unassigned: ${savedProxy.assignmentError}`, 'warn');
+    return;
+  }
+
   log('Proxy saved.', 'success');
 }
 
@@ -808,6 +855,7 @@ function renderProxyList(proxies = [], accountProxyMap = {}) {
 
   proxies.forEach((proxy) => {
     const assignedAccountId = getAssignedAccountForProxy(proxy, accountProxyMap);
+    const assignmentRank = getProxyAssignmentRank(proxy, assignedAccountId, accountProxyMap);
     const status = getProxyStatus(proxy);
     const card = document.createElement('div');
     card.className = 'proxy-card';
@@ -832,6 +880,11 @@ function renderProxyList(proxies = [], accountProxyMap = {}) {
     meta.textContent = `${proxy.type || 'http'} | ${location} | ${lastIp} | ${latency}`;
 
     const assignment = createProxyAssignmentSelect(proxy, assignedAccountId, accountProxyMap);
+    const assignmentMeta = document.createElement('div');
+    assignmentMeta.className = 'proxy-card-assignment';
+    assignmentMeta.textContent = assignedAccountId
+      ? `${getProxyAssignmentLabel(assignmentRank)} for ${getProxyAccountLabel(assignedAccountId)}`
+      : `Unassigned. Each account can use up to ${getMaxAccountProxies()} proxies.`;
 
     const actions = document.createElement('div');
     actions.className = 'proxy-card-actions';
@@ -852,22 +905,27 @@ function renderProxyList(proxies = [], accountProxyMap = {}) {
     removeButton.addEventListener('click', () => removeProxy(proxy.id));
 
     actions.append(testButton, toggleButton, removeButton);
-    card.append(head, meta, assignment, actions);
+    card.append(head, meta, assignment, assignmentMeta, actions);
     proxyList.appendChild(card);
   });
 }
 
 async function updateProxyAssignment(proxy, nextAccountId, previousAccountId) {
   if (!window.ProxyStorage) return;
-
-  if (previousAccountId && previousAccountId !== nextAccountId) {
-    await window.ProxyStorage.setAccountProxyAssignment(previousAccountId, '');
-  }
+  let result;
 
   if (nextAccountId) {
-    await window.ProxyStorage.setAccountProxyAssignment(nextAccountId, proxy.id);
+    result = await window.ProxyStorage.setAccountProxyAssignment(nextAccountId, proxy.id);
   } else {
-    await window.ProxyStorage.updateProxy(proxy.id, { assignedTo: '' });
+    result = typeof window.ProxyStorage.removeProxyAssignment === 'function'
+      ? await window.ProxyStorage.removeProxyAssignment(proxy.id)
+      : await window.ProxyStorage.setAccountProxyAssignment(previousAccountId, '');
+  }
+
+  if (result && result.ok === false) {
+    await loadProxyManagerUi();
+    log(result.error || 'Proxy assignment failed.', 'error');
+    return;
   }
 
   await loadProxyManagerUi();
