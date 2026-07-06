@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-06-23-proxy-state-fix-v1";
+  const CONTENT_SCRIPT_VERSION = "2026-07-03-gmail-account-detection-v2";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");
@@ -461,7 +461,7 @@ zoho: {
 
   function sendMsg(type, data = {}) {
     try {
-      chrome.runtime.sendMessage({ type, ...data });
+      chrome.runtime.sendMessage({ type, provider: providerName, ...data });
     } catch (e) {
       // Extension context may be invalidated
     }
@@ -1331,6 +1331,124 @@ zoho: {
     return match ? parseInt(match[1], 10) : 0;
   }
 
+  function getGmailAccountIndexFromUrl(url = "") {
+    try {
+      const parsed = new URL(url, window.location.href);
+      const pathMatch = parsed.pathname.match(/\/mail\/u\/(\d+)(?:\/|$)/);
+      if (pathMatch) return parseInt(pathMatch[1], 10);
+
+      const authUser = parsed.searchParams.get("authuser");
+      if (/^\d+$/.test(authUser || "")) return parseInt(authUser, 10);
+    } catch (error) {
+      const fallbackMatch = String(url || "").match(/\/mail\/u\/(\d+)(?:\/|$)/);
+      if (fallbackMatch) return parseInt(fallbackMatch[1], 10);
+    }
+
+    return null;
+  }
+
+  function getGmailAccountUrl(index = 0) {
+    return `https://mail.google.com/mail/u/${index}/#inbox`;
+  }
+
+  function normalizeAccountText(value = "") {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function extractEmail(value = "") {
+    const match = normalizeAccountText(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    return match ? match[0].toLowerCase() : "";
+  }
+
+  function extractEmailFromUrl(value = "") {
+    try {
+      const parsed = new URL(value, window.location.href);
+      const params = ["email", "Email", "login_hint", "identifier", "authuser"];
+
+      for (const param of params) {
+        const email = extractEmail(parsed.searchParams.get(param) || "");
+        if (email) return email;
+      }
+    } catch (error) {
+      return extractEmail(value);
+    }
+
+    return extractEmail(value);
+  }
+
+  function isVisibleElement(element) {
+    if (!element) return false;
+
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || element.hasAttribute("hidden")) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function getGmailElementAccountText(element) {
+    if (!element) return "";
+
+    const href = element.href || element.getAttribute?.("href") || "";
+    const imageAlt = element.querySelector?.("img[alt]")?.getAttribute("alt") || "";
+
+    return normalizeAccountText([
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title"),
+      element.getAttribute?.("data-tooltip"),
+      element.getAttribute?.("data-email"),
+      element.getAttribute?.("data-identifier"),
+      imageAlt,
+      element.textContent,
+      href,
+    ].filter(Boolean).join(" "));
+  }
+
+  function getGmailEmailFromElement(element) {
+    const href = element?.href || element?.getAttribute?.("href") || "";
+    return extractEmail(getGmailElementAccountText(element)) || extractEmailFromUrl(href);
+  }
+
+  function getGmailAccountCandidateElements() {
+    return Array.from(document.querySelectorAll([
+      'a[href*="/mail/u/"]',
+      'a[href*="authuser="]',
+      'a[href*="AccountChooser"]',
+      'a[href*="SignOutOptions"]',
+      'a[aria-label*="Google Account"]',
+      'button[aria-label*="Google Account"]',
+    ].join(",")));
+  }
+
+  function findGmailProfileButton() {
+    return Array.from(document.querySelectorAll([
+      'a[aria-label*="Google Account"]',
+      'button[aria-label*="Google Account"]',
+      'a[href*="SignOutOptions"]',
+      'a[href*="accounts.google.com"]',
+    ].join(","))).find(isVisibleElement) || null;
+  }
+
+  async function openGmailAccountMenu() {
+    const button = findGmailProfileButton();
+    if (!button) return false;
+
+    clickElementLikeUser(button);
+    await sleep(1200);
+    return true;
+  }
+
+  function closeGmailAccountMenu() {
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Escape",
+      code: "Escape",
+      bubbles: true,
+      cancelable: true,
+    }));
+  }
+
   function makeAccount(id, label, url = null) {
     return {
       id,
@@ -1340,30 +1458,88 @@ zoho: {
     };
   }
 
-  function discoverGmailAccounts() {
+  function makeGmailAccount(index, email = "", url = null) {
+    const safeIndex = Number.isFinite(index) ? index : getGmailAccountIndex();
+    const safeEmail = String(email || "").toLowerCase();
+    const label = safeEmail || `Gmail account ${safeIndex + 1}`;
+
+    return {
+      ...makeAccount(`gmail:${safeIndex}`, label, url || getGmailAccountUrl(safeIndex)),
+      detectedLabel: label,
+    };
+  }
+
+  function getGmailAccountSortIndex(account) {
+    const urlIndex = getGmailAccountIndexFromUrl(account?.url || "");
+    if (Number.isFinite(urlIndex)) return urlIndex;
+
+    const idMatch = String(account?.id || "").match(/^gmail:(\d+)$/);
+    return idMatch ? parseInt(idMatch[1], 10) : Number.MAX_SAFE_INTEGER;
+  }
+
+  function uniqueGmailAccounts(accounts) {
+    const byId = new Map();
+
+    accounts.forEach((account) => {
+      if (!account?.id) return;
+
+      const existing = byId.get(account.id);
+      const hasEmailLabel = Boolean(extractEmail(account.label));
+      const existingHasEmailLabel = Boolean(extractEmail(existing?.label || ""));
+
+      if (!existing || (hasEmailLabel && !existingHasEmailLabel)) {
+        byId.set(account.id, account);
+      }
+    });
+
+    return Array.from(byId.values()).sort((a, b) => getGmailAccountSortIndex(a) - getGmailAccountSortIndex(b));
+  }
+
+  function collectGmailAccountsFromDom(accounts) {
+    const currentIndex = getGmailAccountIndex();
+
+    getGmailAccountCandidateElements().forEach((element) => {
+      const href = element.href || element.getAttribute?.("href") || "";
+      const index = getGmailAccountIndexFromUrl(href);
+      const email = getGmailEmailFromElement(element);
+      const text = getGmailElementAccountText(element).toLowerCase();
+      const looksLikeAccountUi =
+        text.includes("google account") ||
+        text.includes("accountchooser") ||
+        text.includes("signoutoptions");
+
+      if (!Number.isFinite(index)) {
+        if (looksLikeAccountUi && email) {
+          accounts.push(makeGmailAccount(currentIndex, email, getGmailAccountUrl(currentIndex)));
+        }
+        return;
+      }
+
+      if (
+        index === currentIndex ||
+        email ||
+        (isVisibleElement(element) && looksLikeAccountUi)
+      ) {
+        accounts.push(makeGmailAccount(index, email, getGmailAccountUrl(index)));
+      }
+    });
+  }
+
+  async function discoverGmailAccounts() {
     const accounts = [];
     const currentIndex = getGmailAccountIndex();
 
-    accounts.push(makeAccount(`gmail:${currentIndex}`, `Account ${currentIndex + 1}`, `https://mail.google.com/mail/u/${currentIndex}/#inbox`));
+    accounts.push(makeGmailAccount(currentIndex, ""));
+    collectGmailAccountsFromDom(accounts);
 
-    for (const link of Array.from(document.querySelectorAll('a[href*="/mail/u/"]'))) {
-      const href = link.href || "";
-      const match = href.match(/\/mail\/u\/(\d+)\//);
-      if (!match) continue;
-
-      const index = parseInt(match[1], 10);
-      accounts.push(makeAccount(`gmail:${index}`, `Account ${index + 1}`, `https://mail.google.com/mail/u/${index}/#inbox`));
+    try {
+      await openGmailAccountMenu();
+      collectGmailAccountsFromDom(accounts);
+    } finally {
+      closeGmailAccountMenu();
     }
 
-    for (let index = 0; index < 3; index++) {
-      accounts.push(makeAccount(`gmail:${index}`, `Account ${index + 1}`, `https://mail.google.com/mail/u/${index}/#inbox`));
-    }
-
-    return uniqueAccounts(accounts).sort((a, b) => {
-      const aIndex = parseInt(a.id.split(":")[1], 10);
-      const bIndex = parseInt(b.id.split(":")[1], 10);
-      return aIndex - bIndex;
-    });
+    return uniqueGmailAccounts(accounts);
   }
 
   function discoverDomAccounts() {
@@ -1417,7 +1593,8 @@ zoho: {
 
     if (provider.host.includes("google")) {
       const index = getGmailAccountIndex();
-      return makeAccount(`gmail:${index}`, `Account ${index + 1}`, `https://mail.google.com/mail/u/${index}/#inbox`);
+      const activeEmail = getGmailEmailFromElement(findGmailProfileButton());
+      return makeGmailAccount(index, activeEmail, getGmailAccountUrl(index));
     }
 
     const switchProvider = getAccountSwitchProvider();
@@ -2704,7 +2881,7 @@ zoho: {
     }
 
     if (msg.action === "GET_AUTOMATION_STATE") {
-      sendResponse({ ok: true, state });
+      sendResponse({ ok: true, state, provider: providerName });
       return false;
     }
 
@@ -2722,7 +2899,7 @@ zoho: {
     }
 
     if (msg.action === "PING") {
-      sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION });
+      sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION, provider: providerName });
       return false;
     }
   });

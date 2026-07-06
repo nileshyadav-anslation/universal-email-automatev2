@@ -69,21 +69,29 @@
   function registerAuthListener() {
     if (registered || !chrome.webRequest?.onAuthRequired) return;
 
-    try {
-      chrome.webRequest.onAuthRequired.addListener(
-        handleAuthRequired,
-        { urls: AUTH_URLS },
-        ["asyncBlocking"],
-      );
-      registered = true;
-    } catch (error) {
-      chrome.webRequest.onAuthRequired.addListener(
-        handleAuthRequired,
-        { urls: AUTH_URLS },
-        ["blocking"],
-      );
-      registered = true;
+    const listenerOptions = [
+      ["asyncBlocking"],
+      ["blocking"],
+    ];
+
+    for (const extraInfoSpec of listenerOptions) {
+      try {
+        chrome.webRequest.onAuthRequired.addListener(
+          handleAuthRequired,
+          { urls: AUTH_URLS },
+          extraInfoSpec,
+        );
+        registered = true;
+        return;
+      } catch (error) {
+        console.warn("[Proxy] Auth listener registration failed", {
+          mode: extraInfoSpec.join(",") || "default",
+          error: error.message,
+        });
+      }
     }
+
+    console.warn("[Proxy] Proxy auth listener could not be registered");
   }
 
   function setActiveProxy(proxy) {

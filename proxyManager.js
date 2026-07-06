@@ -153,6 +153,61 @@
     return failOrFallback(finalError, options);
   }
 
+  async function applyGlobalProxy(proxyId, options = {}) {
+    emit(options, "[Proxy] Loading global proxy", "info");
+
+    const proxies = await globalThis.ProxyStorage.getProxies();
+    const proxy = proxies.find((item) => item.id === proxyId);
+
+    if (!proxy) {
+      return { ok: false, error: "Global proxy is not selected" };
+    }
+
+    const validationError = validateProxy(proxy, { label: "all provider tabs" });
+    if (validationError) {
+      await markProxyFailed(proxy, validationError);
+      return { ok: false, proxy, error: validationError };
+    }
+
+    try {
+      await globalThis.ProxyController.applyProxy(proxy);
+      const health = await globalThis.ProxyHealthChecker.verifyCurrentIp(proxy);
+      await updateProxyHealth(proxy, health);
+
+      if (!health.ok) {
+        await globalThis.ProxyController.clearProxy().catch(() => null);
+        return {
+          ok: false,
+          proxy,
+          status: health.status,
+          error: health.error || "Global proxy IP verification failed",
+        };
+      }
+
+      emit(options, `[Proxy] IP verified: ${health.ip}`, "success");
+      return {
+        ok: true,
+        applied: true,
+        proxy: {
+          ...proxy,
+          status: "Online",
+          lastKnownIp: health.ip,
+          latency: `${health.latency}ms`,
+          lastCheck: health.lastCheck,
+        },
+      };
+    } catch (error) {
+      await markProxyFailed(proxy, error.message || "Global proxy failed");
+      await globalThis.ProxyController.clearProxy().catch(() => null);
+      return {
+        ok: false,
+        proxy,
+        status: "Offline",
+        error: error.message || "Global proxy failed",
+      };
+    }
+  }
+
   async function testProxy(proxyId) {
     const proxies = await globalThis.ProxyStorage.getProxies();
     const proxy = proxies.find((item) => item.id === proxyId);
@@ -207,6 +262,7 @@
 
   globalThis.ProxyManager = {
     applyForAccount,
+    applyGlobalProxy,
     testProxy,
     clearProxy,
   };

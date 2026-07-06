@@ -79,10 +79,28 @@
       <div class="setting-row">
         <div class="setting-info">
           <span class="setting-name">Mail Provider</span>
-          <span class="setting-desc">Choose which mailbox to open and automate</span>
+          <span class="setting-desc">Choose one or more mailboxes to automate</span>
         </div>
         <div class="setting-control">
-          <select id="providerSelect" class="batch-select">
+          <div class="provider-checkbox-group" id="providerCheckboxGroup">
+            <label class="provider-option">
+              <input type="checkbox" name="selectedProvider" value="gmail" checked />
+              <span>Gmail</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" name="selectedProvider" value="yahoo" />
+              <span>Yahoo</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" name="selectedProvider" value="aol" />
+              <span>AOL</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" name="selectedProvider" value="outlook" />
+              <span>Outlook</span>
+            </label>
+          </div>
+          <select id="providerSelect" class="batch-select provider-legacy-select" aria-label="Primary provider">
             <option value="gmail">Gmail</option>
             <option value="yahoo">Yahoo</option>
             <option value="aol">AOL</option>
@@ -260,7 +278,10 @@
         <div class="account-list" id="accountList">
           <div class="account-empty">Enable switching and open a supported inbox.</div>
         </div>
-        <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
+        <div class="account-actions">
+          <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
+          <button class="btn settings-action" id="btnDeepScanGmail">Deep Scan Gmail</button>
+        </div>
       </div>
 
       <div class="setting-row">
@@ -290,6 +311,32 @@
               <span class="toggle-thumb"></span>
             </span>
           </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Proxy Apply Mode</span>
+          <span class="setting-desc">Choose how proxy is applied during automation</span>
+        </div>
+        <div class="setting-control">
+          <select id="proxyApplyModeSelect" class="batch-select">
+            <option value="off">Off</option>
+            <option value="global">Same Proxy for All Tabs</option>
+            <option value="perAccount">Per-Account Proxy</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setting-row" id="globalProxyRow" style="display:none;">
+        <div class="setting-info">
+          <span class="setting-name">Global Proxy</span>
+          <span class="setting-desc">Used by all provider tabs in Same Proxy mode</span>
+        </div>
+        <div class="setting-control">
+          <select id="globalProxySelect" class="batch-select">
+            <option value="">Select proxy</option>
+          </select>
         </div>
       </div>
 

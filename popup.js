@@ -16,6 +16,7 @@ const logScroll   = $('logScroll');
 const logEmpty    = $('logEmpty');
 const gmailAlert  = $('gmailAlert');
 const providerSelect = $('providerSelect');
+const providerCheckboxGroup = $('providerCheckboxGroup');
 const readTimeSlider  = $('readTimeSlider');
 const backDelaySlider = $('backDelaySlider');
 const readTimeVal     = $('readTimeVal');
@@ -29,8 +30,12 @@ const enableAccountSwitchingToggle = $('enableAccountSwitchingToggle');
 const accountSelectionRow = $('accountSelectionRow');
 const accountList = $('accountList');
 const btnRefreshAccounts = $('btnRefreshAccounts');
+const btnDeepScanGmail = $('btnDeepScanGmail');
 const proxyManagerToggle = $('proxyManagerToggle');
 const proxyFallbackToggle = $('proxyFallbackToggle');
+const proxyApplyModeSelect = $('proxyApplyModeSelect');
+const globalProxyRow = $('globalProxyRow');
+const globalProxySelect = $('globalProxySelect');
 const proxyHostInput = $('proxyHostInput');
 const proxyPortInput = $('proxyPortInput');
 const proxyUsernameInput = $('proxyUsernameInput');
@@ -57,6 +62,7 @@ const btnDeleteAutomationTemplate = $('btnDeleteAutomationTemplate');
 
 const DEFAULT_SETTINGS = {
   selectedProvider: 'gmail',
+  selectedProviders: ['gmail'],
   readTime: 4,
   backDelay: 2,
   autoRefresh: true,
@@ -72,8 +78,17 @@ const DEFAULT_SETTINGS = {
   enableAccountSwitching: false,
   enableProxyManager: false,
   allowProxyFallback: false,
+  proxyApplyMode: 'off',
+  globalProxyId: '',
   selectedAccounts: []
 };
+
+const PROVIDER_OPTIONS = [
+  { id: 'gmail', label: 'Gmail' },
+  { id: 'yahoo', label: 'Yahoo' },
+  { id: 'aol', label: 'AOL' },
+  { id: 'outlook', label: 'Outlook' },
+];
 
 const BUILT_IN_AUTOMATION_TEMPLATES = [
   {
@@ -121,6 +136,7 @@ const BUILT_IN_AUTOMATION_TEMPLATES = [
 
 let savedAutomationTemplates = [];
 let knownAccounts = [];
+let accountLabelOverrides = {};
 
 
 let runtimeInterval = null;
@@ -191,6 +207,10 @@ function sendRuntimeMessage(message) {
       resolve(response || { ok: false, error: 'No response from background' });
     });
   });
+}
+
+function getStorage(keys) {
+  return new Promise(resolve => chrome.storage.local.get(keys, resolve));
 }
 
 function loadActivityLogs() {
@@ -265,6 +285,212 @@ function validateMaxLinksPerEmail(value) {
   return parsed;
 }
 
+function getProviderLabel(provider = '') {
+  return PROVIDER_OPTIONS.find(item => item.id === provider)?.label || provider || 'Mail';
+}
+
+function getProviderCheckboxes() {
+  return Array.from(providerCheckboxGroup.querySelectorAll('input[name="selectedProvider"]'));
+}
+
+function normalizeSelectedProviders(providers = []) {
+  const allowed = new Set(PROVIDER_OPTIONS.map(item => item.id));
+  const seen = new Set();
+  const selected = [];
+
+  (Array.isArray(providers) ? providers : [providers]).forEach((provider) => {
+    const safeProvider = String(provider || '').trim();
+    if (!allowed.has(safeProvider) || seen.has(safeProvider)) return;
+    seen.add(safeProvider);
+    selected.push(safeProvider);
+  });
+
+  return selected.length ? selected : [DEFAULT_SETTINGS.selectedProvider];
+}
+
+function getSelectedProviders() {
+  const selected = getProviderCheckboxes()
+    .filter(input => input.checked)
+    .map(input => input.value);
+
+  return normalizeSelectedProviders(selected.length ? selected : [providerSelect.value]);
+}
+
+function setSelectedProviders(providers = []) {
+  const selected = normalizeSelectedProviders(providers);
+  const selectedSet = new Set(selected);
+
+  getProviderCheckboxes().forEach((input) => {
+    input.checked = selectedSet.has(input.value);
+  });
+
+  providerSelect.value = selected[0] || DEFAULT_SETTINGS.selectedProvider;
+}
+
+function getAccountProviderId(account = {}) {
+  return account.provider || String(account.id || '').split(':')[0] || '';
+}
+
+function filterAccountsByProviders(accounts = [], providers = getSelectedProviders()) {
+  const selected = new Set(normalizeSelectedProviders(providers));
+  return (Array.isArray(accounts) ? accounts : []).filter(account => selected.has(getAccountProviderId(account)));
+}
+
+function mergeAccountLists(accounts = []) {
+  const byId = new Map();
+
+  (Array.isArray(accounts) ? accounts : []).forEach((account) => {
+    if (!account?.id) return;
+    byId.set(account.id, account);
+  });
+
+  return Array.from(byId.values());
+}
+
+async function getCachedAccountsForProviders(providers = getSelectedProviders()) {
+  const stored = await getStorage(['discoveredAccounts']);
+  return filterAccountsByProviders(
+    Array.isArray(stored.discoveredAccounts) ? stored.discoveredAccounts : [],
+    providers
+  );
+}
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sanitizeAccountLabelOverrides(value = {}) {
+  if (!isPlainObject(value)) return {};
+
+  return Object.entries(value).reduce((overrides, [accountId, label]) => {
+    const safeAccountId = String(accountId || '').trim();
+    const safeLabel = String(label || '').trim();
+
+    if (safeAccountId && safeLabel) {
+      overrides[safeAccountId] = safeLabel.slice(0, 100);
+    }
+
+    return overrides;
+  }, {});
+}
+
+function applyAccountLabelOverrides(accounts = []) {
+  return (Array.isArray(accounts) ? accounts : [])
+    .filter(account => account?.id)
+    .map((account) => {
+      const detectedLabel = account.detectedLabel || account.label || account.id;
+      const override = accountLabelOverrides[account.id];
+
+      return {
+        ...account,
+        detectedLabel,
+        label: override || detectedLabel,
+      };
+    });
+}
+
+function getFallbackAccountLabel(account, provider, index) {
+  return account.label || account.detectedLabel || `${getProviderLabel(provider)} Account ${index + 1}`;
+}
+
+function persistAccountSelection(accounts = knownAccounts) {
+  const selectedIds = new Set(getSelectedAccounts());
+  const selectedAccounts = accounts
+    .filter(account => selectedIds.has(account.id))
+    .map(account => account.id);
+
+  chrome.storage.local.set({
+    discoveredAccounts: accounts,
+    selectedAccounts: selectedAccounts.length ? selectedAccounts : accounts.map(account => account.id),
+    accountLabelOverrides,
+  });
+}
+
+function saveAccountLabelOverride(accountId, nextLabel) {
+  const safeAccountId = String(accountId || '').trim();
+  const safeLabel = String(nextLabel || '').trim().slice(0, 100);
+
+  if (!safeAccountId) return;
+
+  if (safeLabel) {
+    accountLabelOverrides[safeAccountId] = safeLabel;
+  } else {
+    delete accountLabelOverrides[safeAccountId];
+  }
+
+  const selectedAccounts = getSelectedAccounts();
+  const nextAccounts = applyAccountLabelOverrides(knownAccounts.map(account => {
+    if (account.id !== safeAccountId) return account;
+
+    const detectedLabel = account.detectedLabel || account.label || account.id;
+    return {
+      ...account,
+      detectedLabel,
+      label: safeLabel || detectedLabel,
+    };
+  }));
+
+  renderAccounts(nextAccounts, selectedAccounts);
+  persistAccountSelection(nextAccounts);
+
+  if (window.ProxyStorage) {
+    loadProxyManagerUi();
+  }
+
+  log(safeLabel ? 'Account label saved.' : 'Account label reset.', 'success');
+}
+
+function removeUnselectedProviderAccountsFromUi({ persist = false } = {}) {
+  const filteredAccounts = applyAccountLabelOverrides(filterAccountsByProviders(knownAccounts));
+  const filteredIds = new Set(filteredAccounts.map(account => account.id));
+  const selectedAccounts = getSelectedAccounts().filter(accountId => filteredIds.has(accountId));
+  const nextSelectedAccounts = selectedAccounts.length
+    ? selectedAccounts
+    : filteredAccounts.map(account => account.id);
+
+  renderAccounts(filteredAccounts, nextSelectedAccounts);
+
+  if (persist) {
+    chrome.storage.local.set({
+      discoveredAccounts: filteredAccounts,
+      selectedAccounts: nextSelectedAccounts,
+      accountLabelOverrides,
+    });
+  }
+}
+
+function getProxyApplyMode() {
+  if (!proxyManagerToggle.checked) return 'off';
+  const mode = proxyApplyModeSelect.value;
+  return mode === 'global' || mode === 'perAccount' ? mode : 'perAccount';
+}
+
+function setProxyApplyMode(mode = 'off') {
+  const safeMode = mode === 'global' || mode === 'perAccount' ? mode : 'off';
+  proxyApplyModeSelect.value = safeMode;
+  proxyManagerToggle.checked = safeMode !== 'off';
+  globalProxyRow.style.display = safeMode === 'global' ? 'flex' : 'none';
+}
+
+function syncProxyModeFromToggle() {
+  if (!proxyManagerToggle.checked) {
+    setProxyApplyMode('off');
+    return;
+  }
+
+  if (proxyApplyModeSelect.value === 'off') {
+    setProxyApplyMode('perAccount');
+    return;
+  }
+
+  setProxyApplyMode(proxyApplyModeSelect.value);
+}
+
+function prefixProviderMessage(message = '', provider = '') {
+  if (!provider || /^\[[^\]]+\]/.test(message)) return message;
+  return `[${getProviderLabel(provider)}] ${message}`;
+}
+
 //  Settings Sliders 
 readTimeSlider.addEventListener('input', () => {
   readTimeVal.textContent = readTimeSlider.value + 's';
@@ -276,7 +502,18 @@ backDelaySlider.addEventListener('input', () => {
   saveSettings();
 });
 
-providerSelect.addEventListener('change', saveSettings);
+providerSelect.addEventListener('change', () => {
+  setSelectedProviders([providerSelect.value || DEFAULT_SETTINGS.selectedProvider]);
+  removeUnselectedProviderAccountsFromUi({ persist: true });
+  saveSettings();
+});
+getProviderCheckboxes().forEach((input) => {
+  input.addEventListener('change', () => {
+    setSelectedProviders(getSelectedProviders());
+    removeUnselectedProviderAccountsFromUi({ persist: true });
+    saveSettings();
+  });
+});
 autoRefreshToggle.addEventListener('change', saveSettings);
 randomEmailOpeningToggle.addEventListener('change', saveSettings);
 retryEmailOpeningToggle.addEventListener('change', saveSettings);
@@ -300,6 +537,7 @@ enableAccountSwitchingToggle.addEventListener('change', async () => {
   }
 });
 proxyManagerToggle.addEventListener('change', async () => {
+  syncProxyModeFromToggle();
   saveSettings();
 
   if (!proxyManagerToggle.checked) {
@@ -312,6 +550,11 @@ proxyManagerToggle.addEventListener('change', async () => {
   }
 });
 proxyFallbackToggle.addEventListener('change', saveSettings);
+proxyApplyModeSelect.addEventListener('change', () => {
+  setProxyApplyMode(proxyApplyModeSelect.value);
+  saveSettings();
+});
+globalProxySelect.addEventListener('change', saveSettings);
 btnAddProxy.addEventListener('click', addProxyFromForm);
 reprocessingModeSelect.addEventListener('change', () => {
   if (reprocessingModeSelect.value === 'unread') {
@@ -322,7 +565,29 @@ reprocessingModeSelect.addEventListener('change', () => {
 
 btnSaveTemplates.addEventListener('click', saveReplyTemplates);
 btnClearProcessedHistory.addEventListener('click', clearProcessedHistory);
-btnRefreshAccounts.addEventListener('click', refreshAccounts);
+btnRefreshAccounts.addEventListener('click', () => refreshAccounts());
+btnDeepScanGmail.addEventListener('click', async () => {
+  if (!getSelectedProviders().includes('gmail')) {
+    log('Select Gmail before running Deep Scan Gmail.', 'warn');
+    return;
+  }
+
+  btnDeepScanGmail.disabled = true;
+  btnDeepScanGmail.textContent = 'Scanning Gmail';
+
+  try {
+    await refreshAccounts({
+      providers: ['gmail'],
+      forceDeepScan: true,
+      mergeWithStored: true,
+    });
+  } finally {
+    if (btnDeepScanGmail.isConnected) {
+      btnDeepScanGmail.disabled = false;
+      btnDeepScanGmail.textContent = 'Deep Scan Gmail';
+    }
+  }
+});
 btnApplyAutomationTemplate.addEventListener('click', applySelectedAutomationTemplate);
 btnSaveAutomationTemplate.addEventListener('click', saveAutomationTemplate);
 btnDeleteAutomationTemplate.addEventListener('click', deleteSelectedAutomationTemplate);
@@ -333,6 +598,7 @@ function getAutomationTemplateSettingsSnapshot() {
   const settings = getCurrentSettings();
   const keysToSave = [
     'selectedProvider',
+    'selectedProviders',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -348,6 +614,8 @@ function getAutomationTemplateSettingsSnapshot() {
     'enableAccountSwitching',
     'enableProxyManager',
     'allowProxyFallback',
+    'proxyApplyMode',
+    'globalProxyId',
     'selectedAccounts'
   ];
 
@@ -408,7 +676,7 @@ function updateAutomationTemplateButtons() {
 function applySettingsToControls(templateSettings = {}) {
   const merged = { ...DEFAULT_SETTINGS, ...getCurrentSettings(), ...templateSettings };
 
-  providerSelect.value = merged.selectedProvider || DEFAULT_SETTINGS.selectedProvider;
+  setSelectedProviders(merged.selectedProviders || [merged.selectedProvider || DEFAULT_SETTINGS.selectedProvider]);
   readTimeSlider.value = merged.readTime;
   readTimeVal.textContent = merged.readTime + 's';
   backDelaySlider.value = merged.backDelay;
@@ -424,8 +692,9 @@ function applySettingsToControls(templateSettings = {}) {
   enableProcessedTrackingToggle.checked = Boolean(merged.enableProcessedTracking);
   reprocessingModeSelect.value = merged.reprocessingMode || DEFAULT_SETTINGS.reprocessingMode;
   enableAccountSwitchingToggle.checked = Boolean(merged.enableAccountSwitching);
-  proxyManagerToggle.checked = Boolean(merged.enableProxyManager);
+  setProxyApplyMode(merged.proxyApplyMode || (merged.enableProxyManager ? 'perAccount' : 'off'));
   proxyFallbackToggle.checked = Boolean(merged.allowProxyFallback);
+  globalProxySelect.value = merged.globalProxyId || '';
   accountSelectionRow.style.display = enableAccountSwitchingToggle.checked ? 'flex' : 'none';
 
   if (Array.isArray(merged.selectedAccounts)) {
@@ -502,7 +771,8 @@ function getCurrentSettings() {
   maxLinksPerEmailInput.value = maxLinksPerEmail;
 
   return {
-    selectedProvider: providerSelect.value || DEFAULT_SETTINGS.selectedProvider,
+    selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
+    selectedProviders: getSelectedProviders(),
     readTime: parseInt(readTimeSlider.value) || DEFAULT_SETTINGS.readTime,
     backDelay: parseInt(backDelaySlider.value) || DEFAULT_SETTINGS.backDelay,
     autoRefresh: autoRefreshToggle.checked,
@@ -516,8 +786,10 @@ function getCurrentSettings() {
     enableProcessedTracking: enableProcessedTrackingToggle.checked,
     reprocessingMode: reprocessingModeSelect.value || DEFAULT_SETTINGS.reprocessingMode,
     enableAccountSwitching: enableAccountSwitchingToggle.checked,
-    enableProxyManager: proxyManagerToggle.checked,
+    enableProxyManager: getProxyApplyMode() !== 'off',
     allowProxyFallback: proxyFallbackToggle.checked,
+    proxyApplyMode: getProxyApplyMode(),
+    globalProxyId: globalProxySelect.value || '',
     selectedAccounts: getSelectedAccounts()
   };
 }
@@ -530,6 +802,8 @@ function saveSettings() {
     window.ProxyStorage.saveProxySettings({
       enabled: settings.enableProxyManager,
       allowFallback: settings.allowProxyFallback,
+      applyMode: settings.proxyApplyMode,
+      globalProxyId: settings.globalProxyId,
     }).catch(error => log(`Proxy settings save failed: ${error.message}`, 'error'));
   }
 }
@@ -537,6 +811,7 @@ function saveSettings() {
 function loadSettings() {
   chrome.storage.local.get([
     'selectedProvider',
+    'selectedProviders',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -554,8 +829,11 @@ function loadSettings() {
     'enableAccountSwitching',
     'enableProxyManager',
     'allowProxyFallback',
+    'proxyApplyMode',
+    'globalProxyId',
     'selectedAccounts',
     'discoveredAccounts',
+    'accountLabelOverrides',
     'proxySettings',
     'proxyConfigs',
     'accountProxyMap',
@@ -563,7 +841,11 @@ function loadSettings() {
     'automationTemplates',
     'selectedAutomationTemplate'
   ], data => {
-    providerSelect.value = data.selectedProvider || DEFAULT_SETTINGS.selectedProvider;
+    setSelectedProviders(
+      Array.isArray(data.selectedProviders) && data.selectedProviders.length
+        ? data.selectedProviders
+        : [data.selectedProvider || DEFAULT_SETTINGS.selectedProvider]
+    );
 
     if (data.readTime)  {
       readTimeSlider.value = data.readTime;
@@ -593,14 +875,36 @@ function loadSettings() {
     enableProcessedTrackingToggle.checked = data.enableProcessedTracking !== undefined ? data.enableProcessedTracking : DEFAULT_SETTINGS.enableProcessedTracking;
     enableAccountSwitchingToggle.checked = data.enableAccountSwitching !== undefined ? data.enableAccountSwitching : DEFAULT_SETTINGS.enableAccountSwitching;
     const proxySettings = data.proxySettings || {};
-    proxyManagerToggle.checked = proxySettings.enabled !== undefined
+    const savedProxyEnabled = proxySettings.enabled !== undefined
       ? Boolean(proxySettings.enabled)
       : (data.enableProxyManager !== undefined ? Boolean(data.enableProxyManager) : DEFAULT_SETTINGS.enableProxyManager);
+    const rawProxyMode = proxySettings.applyMode || data.proxyApplyMode || '';
+    const savedProxyMode = rawProxyMode === 'global' || rawProxyMode === 'perAccount'
+      ? rawProxyMode
+      : (savedProxyEnabled ? 'perAccount' : 'off');
+    setProxyApplyMode(savedProxyEnabled ? savedProxyMode : 'off');
+    globalProxySelect.value = proxySettings.globalProxyId || data.globalProxyId || DEFAULT_SETTINGS.globalProxyId;
     proxyFallbackToggle.checked = proxySettings.allowFallback !== undefined
       ? Boolean(proxySettings.allowFallback)
       : (data.allowProxyFallback !== undefined ? Boolean(data.allowProxyFallback) : DEFAULT_SETTINGS.allowProxyFallback);
     accountSelectionRow.style.display = enableAccountSwitchingToggle.checked ? 'flex' : 'none';
-    renderAccounts(Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [], Array.isArray(data.selectedAccounts) ? data.selectedAccounts : []);
+    accountLabelOverrides = sanitizeAccountLabelOverrides(data.accountLabelOverrides);
+    const storedAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
+    const filteredAccounts = applyAccountLabelOverrides(filterAccountsByProviders(storedAccounts));
+    const filteredIds = new Set(filteredAccounts.map(account => account.id));
+    const filteredSelectedAccounts = (Array.isArray(data.selectedAccounts) ? data.selectedAccounts : [])
+      .filter(accountId => filteredIds.has(accountId));
+    const nextSelectedAccounts = filteredSelectedAccounts.length
+      ? filteredSelectedAccounts
+      : filteredAccounts.map(account => account.id);
+    renderAccounts(filteredAccounts, nextSelectedAccounts);
+    if (filteredAccounts.length !== storedAccounts.length) {
+      chrome.storage.local.set({
+        discoveredAccounts: filteredAccounts,
+        selectedAccounts: nextSelectedAccounts,
+        accountLabelOverrides,
+      });
+    }
     reprocessingModeSelect.value = data.reprocessingMode || DEFAULT_SETTINGS.reprocessingMode;
     if (Array.isArray(data.replyTemplates)) {
       replyTemplatesInput.value = data.replyTemplates.join('\n');
@@ -616,6 +920,8 @@ function loadSettings() {
       window.ProxyStorage.saveProxySettings({
         enabled: proxyManagerToggle.checked,
         allowFallback: proxyFallbackToggle.checked,
+        applyMode: getProxyApplyMode(),
+        globalProxyId: globalProxySelect.value || '',
       }).finally(loadProxyManagerUi);
     } else {
       loadProxyManagerUi();
@@ -629,10 +935,11 @@ function getSelectedAccounts() {
 }
 
 function renderAccounts(accounts, selectedAccounts = []) {
-  setKnownAccounts(accounts);
+  const displayAccounts = applyAccountLabelOverrides(accounts);
+  setKnownAccounts(displayAccounts);
   accountList.innerHTML = '';
 
-  if (!accounts.length) {
+  if (!displayAccounts.length) {
     const empty = document.createElement('div');
     empty.className = 'account-empty';
     empty.textContent = 'No additional accounts detected yet.';
@@ -640,24 +947,86 @@ function renderAccounts(accounts, selectedAccounts = []) {
     return;
   }
 
-  const selected = new Set(selectedAccounts.length ? selectedAccounts : accounts.map(account => account.id));
+  const selected = new Set(selectedAccounts.length ? selectedAccounts : displayAccounts.map(account => account.id));
+  const groups = new Map();
 
-  accounts.forEach((account, index) => {
-    const label = document.createElement('label');
-    label.className = 'account-option';
-
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.value = account.id;
-    checkbox.checked = selected.has(account.id);
-    checkbox.addEventListener('change', saveSettings);
-
-    const text = document.createElement('span');
-    text.textContent = account.label || `Account ${index + 1}`;
-
-    label.append(checkbox, text);
-    accountList.appendChild(label);
+  displayAccounts.forEach((account) => {
+    const provider = account.provider || String(account.id || '').split(':')[0] || 'mail';
+    if (!groups.has(provider)) {
+      groups.set(provider, []);
+    }
+    groups.get(provider).push(account);
   });
+
+  PROVIDER_OPTIONS
+    .map(item => item.id)
+    .concat(Array.from(groups.keys()).filter(provider => !PROVIDER_OPTIONS.some(item => item.id === provider)))
+    .forEach((provider) => {
+      const providerAccounts = groups.get(provider) || [];
+      if (!providerAccounts.length) return;
+
+      const group = document.createElement('div');
+      group.className = 'account-provider-group';
+
+      const title = document.createElement('div');
+      title.className = 'account-provider-title';
+      title.textContent = getProviderLabel(provider);
+      group.appendChild(title);
+
+      providerAccounts.forEach((account, index) => {
+        const label = document.createElement('label');
+        label.className = 'account-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = account.id;
+        checkbox.checked = selected.has(account.id);
+        checkbox.addEventListener('change', saveSettings);
+
+        if (provider === 'gmail') {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'account-label-input';
+          input.value = getFallbackAccountLabel(account, provider, index);
+          input.placeholder = 'Gmail email or label';
+          input.title = 'Edit this label if Gmail hides the actual email address.';
+
+          let lastCommittedLabel = input.value.trim();
+          const commitLabel = () => {
+            const nextLabel = input.value.trim();
+            if (nextLabel === lastCommittedLabel) return;
+            lastCommittedLabel = nextLabel || account.detectedLabel || getFallbackAccountLabel(account, provider, index);
+            saveAccountLabelOverride(account.id, nextLabel);
+          };
+
+          input.addEventListener('click', event => event.stopPropagation());
+          input.addEventListener('keydown', (event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              input.blur();
+            } else if (event.key === 'Escape') {
+              input.value = account.label || account.detectedLabel || getFallbackAccountLabel(account, provider, index);
+              input.blur();
+            }
+          });
+          input.addEventListener('change', commitLabel);
+          input.addEventListener('blur', commitLabel);
+
+          label.append(checkbox, input);
+          group.appendChild(label);
+          return;
+        }
+
+        const text = document.createElement('span');
+        text.className = 'account-label-text';
+        text.textContent = getFallbackAccountLabel(account, provider, index);
+
+        label.append(checkbox, text);
+        group.appendChild(label);
+      });
+
+      accountList.appendChild(group);
+    });
 }
 
 function getAssignableProxyAccounts(extraAccountId = '') {
@@ -748,6 +1117,24 @@ function getProxyAssignmentLabel(rank) {
 
 function getProxyAccountLabel(accountId = '') {
   return getAssignableProxyAccounts(accountId).find(account => account.id === accountId)?.label || accountId;
+}
+
+function populateGlobalProxySelect(proxies = [], selectedValue = globalProxySelect.value) {
+  globalProxySelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select proxy';
+  globalProxySelect.appendChild(placeholder);
+
+  proxies.forEach((proxy) => {
+    const option = document.createElement('option');
+    option.value = proxy.id;
+    option.textContent = `${proxy.host}:${proxy.port}${proxy.enabled === false ? ' (disabled)' : ''}`;
+    globalProxySelect.appendChild(option);
+  });
+
+  globalProxySelect.value = selectedValue || '';
 }
 
 function getProxyStatus(proxy) {
@@ -982,6 +1369,21 @@ async function testProxy(proxyId, button) {
   }
 }
 
+function renderDiscoveredAccountsPayload(rawAccounts = [], providers = getSelectedProviders(), options = {}) {
+  const accounts = applyAccountLabelOverrides(filterAccountsByProviders(rawAccounts, providers));
+  const discoveredIds = new Set(accounts.map(account => account.id));
+  const selected = getSelectedAccounts().filter(accountId => discoveredIds.has(accountId));
+  const selectedAccounts = options.selectAll
+    ? accounts.map(account => account.id)
+    : (selected.length ? selected : accounts.map(account => account.id));
+
+  renderAccounts(accounts, selectedAccounts);
+  chrome.storage.local.set({ discoveredAccounts: accounts, selectedAccounts, accountLabelOverrides });
+  gmailAlert.style.display = accounts.length ? 'none' : gmailAlert.style.display;
+
+  return accounts.length;
+}
+
 async function loadProxyManagerUi() {
   if (!window.ProxyStorage) return;
 
@@ -993,6 +1395,10 @@ async function loadProxyManagerUi() {
 
   proxyManagerToggle.checked = Boolean(proxySettings.enabled);
   proxyFallbackToggle.checked = Boolean(proxySettings.allowFallback);
+  const rawProxyMode = proxySettings.applyMode || '';
+  const safeProxyMode = rawProxyMode === 'global' || rawProxyMode === 'perAccount' ? rawProxyMode : 'perAccount';
+  setProxyApplyMode(proxySettings.enabled ? safeProxyMode : 'off');
+  populateGlobalProxySelect(proxies, proxySettings.globalProxyId || globalProxySelect.value);
   populateProxyAccountOptions();
   renderProxyList(proxies, accountProxyMap);
 }
@@ -1016,21 +1422,75 @@ async function ensureContentScript(tabId) {
   });
 }
 
-async function refreshAccounts() {
-  const tab = await checkGmailAndShowAlert();
-  if (!tab) return;
+async function refreshAccounts(options = {}) {
+  const providers = normalizeSelectedProviders(options.providers || getSelectedProviders());
+  const forceDeepScan = Boolean(options.forceDeepScan);
+  const mergeWithStored = Boolean(options.mergeWithStored);
+  const renderProviders = getSelectedProviders();
+  const isGmailOnlyRefresh = providers.length === 1 && providers[0] === 'gmail';
+
+  if (!forceDeepScan && isGmailOnlyRefresh) {
+    const cachedAccounts = await getCachedAccountsForProviders(['gmail']);
+
+    if (cachedAccounts.length) {
+      const accountCount = renderDiscoveredAccountsPayload(cachedAccounts, renderProviders);
+      log(`Loaded ${accountCount} cached Gmail account(s). Use Deep Scan Gmail to re-detect.`, 'success');
+      return;
+    }
+  }
+
+  log(
+    forceDeepScan
+      ? 'Deep scanning Gmail accounts...'
+      : `Refreshing accounts for ${providers.map(getProviderLabel).join(', ')}...`,
+    forceDeepScan ? 'warn' : 'info'
+  );
 
   try {
-    await ensureContentScript(tab.id);
-    const response = await chrome.tabs.sendMessage(tab.id, { action: 'DISCOVER_ACCOUNTS' });
-    const accounts = response && Array.isArray(response.accounts) ? response.accounts : [];
-    const selected = getSelectedAccounts();
-    const selectedAccounts = selected.length ? selected : accounts.map(account => account.id);
+    const response = await sendRuntimeMessage({
+      action: 'DISCOVER_PROVIDER_ACCOUNTS',
+      providers,
+      forceDeepScan,
+    });
 
-    renderAccounts(accounts, selectedAccounts);
-    chrome.storage.local.set({ discoveredAccounts: accounts, selectedAccounts });
-    log(accounts.length ? `Detected ${accounts.length} account(s)` : 'No accounts detected', accounts.length ? 'success' : 'warn');
+    if (!response.ok) {
+      throw new Error(response.error || 'Provider account discovery failed');
+    }
+
+    let rawAccounts = response && Array.isArray(response.accounts) ? response.accounts : [];
+
+    if (mergeWithStored || forceDeepScan) {
+      const stored = await getStorage(['discoveredAccounts']);
+      const requestedProviderSet = new Set(providers);
+      const storedAccounts = Array.isArray(stored.discoveredAccounts) ? stored.discoveredAccounts : [];
+      rawAccounts = mergeAccountLists([
+        ...storedAccounts.filter(account => !requestedProviderSet.has(getAccountProviderId(account))),
+        ...rawAccounts
+      ]);
+    } else if (!rawAccounts.length) {
+      const cachedAccounts = await getCachedAccountsForProviders(providers);
+      rawAccounts = cachedAccounts;
+    }
+
+    const accountCount = renderDiscoveredAccountsPayload(rawAccounts, renderProviders, {
+      selectAll: forceDeepScan,
+    });
+    log(
+      accountCount
+        ? `${forceDeepScan ? 'Deep scan detected' : 'Detected'} ${accountCount} account(s)`
+        : 'No accounts detected',
+      accountCount ? 'success' : 'warn'
+    );
   } catch (error) {
+    if (forceDeepScan) {
+      const cachedAccounts = await getCachedAccountsForProviders(renderProviders);
+      if (cachedAccounts.length) {
+        renderDiscoveredAccountsPayload(cachedAccounts, renderProviders);
+      }
+    } else {
+      renderAccounts([], []);
+      chrome.storage.local.set({ discoveredAccounts: [], selectedAccounts: [] });
+    }
     log(`Account detection failed: ${error.message}`, 'error');
   }
 }
@@ -1089,10 +1549,23 @@ btnStart.addEventListener('click', async () => {
   statRuntime.textContent = '0:00';
 
   setStatus('running', 'Running');
-  log('Opening mail tab and starting automation...', 'success');
 
   const settings = getCurrentSettings();
-  if (settings.enableAccountSwitching && settings.selectedAccounts.length === 0) {
+
+  if (settings.selectedProviders.length > 1 && settings.enableProxyManager && settings.proxyApplyMode === 'perAccount') {
+    setStatus('idle', 'Idle');
+    log('Parallel multi-provider automation with per-account proxies is not supported in one Chrome profile. Use Same Proxy for All Tabs or run providers sequentially.', 'error');
+    return;
+  }
+
+  log(
+    settings.selectedProviders.length > 1
+      ? `Opening provider tabs: ${settings.selectedProviders.map(getProviderLabel).join(', ')}`
+      : `Opening ${getProviderLabel(settings.selectedProvider)} tab and starting automation...`,
+    'success'
+  );
+
+  if (settings.enableAccountSwitching && (settings.selectedAccounts.length === 0 || settings.selectedProviders.length > 1)) {
     await refreshAccounts();
     settings.selectedAccounts = getSelectedAccounts();
   }
@@ -1106,23 +1579,25 @@ btnStart.addEventListener('click', async () => {
     }
 
     gmailAlert.style.display = 'none';
-    log('Automation started', 'success');
+    if (response.mode === 'multi-provider') {
+      const started = (response.results || []).filter(result => result.ok).map(result => getProviderLabel(result.provider));
+      log(`Automation started for ${started.join(', ')}`, 'success');
+    } else {
+      log('Automation started', 'success');
+    }
   });
 });
 
 btnPause.addEventListener('click', async () => {
-  const tab = await getMailTab();
-  if (!tab) return;
-
   if (currentState === 'running') {
     setStatus('paused', 'Paused');
     log('Automation paused', 'warn');
-    chrome.tabs.sendMessage(tab.id, { action: 'PAUSE' });
+    await sendRuntimeMessage({ action: 'PAUSE_AUTOMATION_ALL', providers: getSelectedProviders() });
     chrome.storage.local.set({ automationState: 'paused' });
   } else if (currentState === 'paused') {
     setStatus('running', 'Running');
     log('Automation resumed', 'success');
-    chrome.tabs.sendMessage(tab.id, { action: 'RESUME' });
+    await sendRuntimeMessage({ action: 'RESUME_AUTOMATION_ALL', providers: getSelectedProviders() });
     chrome.storage.local.set({ automationState: 'running' });
     btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
     return;
@@ -1132,11 +1607,10 @@ btnPause.addEventListener('click', async () => {
 });
 
 btnStop.addEventListener('click', async () => {
-  const tab = await getMailTab();
   setStatus('stopped', 'Stopped');
   log('Automation stopped', 'error');
   btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
-  if (tab) chrome.tabs.sendMessage(tab.id, { action: 'STOP' });
+  await sendRuntimeMessage({ action: 'STOP_AUTOMATION_ALL', providers: getSelectedProviders() });
   chrome.storage.local.set({ automationState: 'stopped' });
   sendRuntimeMessage({ action: 'CLEAR_PROXY' }).catch(() => null);
   // Re-enable start after stopping
@@ -1145,12 +1619,42 @@ btnStop.addEventListener('click', async () => {
   }, 2000);
 });
 
+function handleProviderTerminalMessage(msg, terminalState) {
+  chrome.storage.local.get(['providerAutomationStates'], (data) => {
+    const states = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
+      ? { ...data.providerAutomationStates }
+      : {};
+    const provider = msg.provider || '';
+    const isMultiProviderRun = provider && Object.keys(states).length > 1;
+
+    if (!isMultiProviderRun) {
+      setStatus('idle', 'Idle');
+      chrome.storage.local.set({ automationState: 'idle' });
+      btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
+      return;
+    }
+
+    states[provider] = terminalState;
+    const stillActive = Object.values(states).some(state => state === 'running' || state === 'paused');
+    chrome.storage.local.set({
+      providerAutomationStates: states,
+      automationState: stillActive ? 'running' : 'idle'
+    });
+
+    if (!stillActive) {
+      setStatus('idle', 'Idle');
+      btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
+      log('All selected provider automations finished', 'success', { persist: false });
+    }
+  });
+}
+
 //  Listen for messages from content.js 
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'EMAIL_OPENED') {
     const count = msg.count || 0;
     updateStat(statOpened, count);
-    log(`Opened: ${msg.subject || 'Email #' + count}`, 'success', { persist: false });
+    log(prefixProviderMessage(`Opened: ${msg.subject || 'Email #' + count}`, msg.provider), 'success', { persist: false });
     chrome.storage.local.set({ emailsOpened: count });
   }
 
@@ -1159,23 +1663,37 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 
   if (msg.type === 'DONE') {
-    setStatus('idle', 'Idle');
-    chrome.storage.local.set({ automationState: 'idle' });
-    log('All unread emails processed ✓', 'success');
-    btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
+    handleProviderTerminalMessage(msg, 'done');
+    log(prefixProviderMessage('All unread emails processed', msg.provider), 'success');
   }
 
   if (msg.type === 'ERROR') {
-    setStatus('idle', 'Idle');
-    chrome.storage.local.set({ automationState: 'idle' });
-    log('Error: ' + msg.message, 'error', { persist: false });
+    handleProviderTerminalMessage(msg, 'error');
+    log(prefixProviderMessage('Error: ' + msg.message, msg.provider), 'error', { persist: false });
   }
 
   if (msg.type === 'LOG') {
-    log(msg.message, msg.level || 'info', { persist: false });
+    log(prefixProviderMessage(msg.message, msg.provider), msg.level || 'info', { persist: false });
+  }
+
+  if (msg.type === 'ACCOUNTS_DISCOVERED') {
+    const selectedProviders = getSelectedProviders();
+    const eventProviders = normalizeSelectedProviders(msg.providers || selectedProviders);
+    const shouldRender = eventProviders.some(provider => selectedProviders.includes(provider));
+
+    if (shouldRender) {
+      const accountCount = renderDiscoveredAccountsPayload(
+        Array.isArray(msg.accounts) ? msg.accounts : [],
+        selectedProviders,
+        { selectAll: Boolean(msg.forceDeepScan) }
+      );
+
+      if (accountCount && !msg.partial) {
+        log(`Detected ${accountCount} account(s)`, 'success', { persist: false });
+      }
+    }
   }
 });
-
 //  Init 
 document.addEventListener('DOMContentLoaded', async () => {
   loadActivityLogs();

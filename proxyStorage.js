@@ -8,6 +8,8 @@
   const DEFAULT_PROXY_SETTINGS = {
     enabled: false,
     allowFallback: false,
+    applyMode: "off",
+    globalProxyId: "",
   };
   const PROXY_STATUSES = new Set(["Online", "Offline", "Auth Failed", "Untested"]);
 
@@ -296,9 +298,15 @@
   }
 
   async function saveProxySettings(settings = {}) {
+    const applyMode = settings.applyMode === "global" || settings.applyMode === "perAccount"
+      ? settings.applyMode
+      : "off";
     const next = {
       ...DEFAULT_PROXY_SETTINGS,
       ...settings,
+      enabled: applyMode !== "off" && settings.enabled !== false,
+      applyMode,
+      globalProxyId: String(settings.globalProxyId || "").trim(),
     };
     await writeStorage({ [PROXY_SETTINGS_KEY]: next });
     return next;
