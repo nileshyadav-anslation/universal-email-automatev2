@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-07-03-gmail-account-detection-v2";
+  const CONTENT_SCRIPT_VERSION = "2026-07-07-yahoo-cold-start-v1";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");
@@ -2834,6 +2834,7 @@ zoho: {
       };
       runAutomation().catch((err) => {
         console.error("[EmailReadAutomate] Error:", err);
+        state = "idle";
         sendMsg("ERROR", { message: err.message });
       });
       sendResponse({ ok: true });

@@ -297,6 +297,51 @@
       return uniqueAccounts(accounts);
     }
 
+    async function waitForAccountUiReady(maxWait = 12000) {
+      const start = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        if (getProfileButton() && (getActiveEmail() || document.readyState === "complete")) {
+          return true;
+        }
+
+        if (deps.getState() === "stopped") return false;
+        await deps.sleep(250);
+      }
+
+      return Boolean(getProfileButton());
+    }
+
+    async function waitForAccountMenuAccounts(maxWait = 7000) {
+      const start = Date.now();
+      let bestAccounts = [];
+      let bestCount = 0;
+      let stableSince = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        const accounts = getAccountsFromDom();
+
+        if (accounts.length > bestCount) {
+          bestAccounts = accounts;
+          bestCount = accounts.length;
+          stableSince = Date.now();
+        }
+
+        if (accounts.length >= 2) {
+          return accounts;
+        }
+
+        if (accounts.length > 0 && Date.now() - stableSince > 1200 && Date.now() - start > 2500) {
+          return accounts;
+        }
+
+        if (deps.getState() === "stopped") break;
+        await deps.sleep(200);
+      }
+
+      return bestAccounts.length ? bestAccounts : getAccountsFromDom();
+    }
+
     async function openAccountMenu() {
       const button = getProfileButton();
       if (!button) return null;
@@ -336,8 +381,9 @@
     async function discoverAccounts() {
       if (!isProvider()) return [];
 
+      await waitForAccountUiReady();
       await openAccountMenu();
-      const accounts = getAccountsFromDom();
+      const accounts = await waitForAccountMenuAccounts();
       closeAccountMenu();
 
       if (accounts.length <= 1) {
@@ -362,7 +408,9 @@
     async function switchAccount(account) {
       if (!isProvider()) return { ok: false, error: "Outlook account switching is only available in Outlook Mail." };
 
+      await waitForAccountUiReady();
       await openAccountMenu();
+      await waitForAccountMenuAccounts();
       const target = getAccountElements().find((element) => accountMatchesElement(account, element));
 
       if (target) {

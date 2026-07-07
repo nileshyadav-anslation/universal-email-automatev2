@@ -22,6 +22,8 @@ const backDelaySlider = $('backDelaySlider');
 const readTimeVal     = $('readTimeVal');
 const backDelayVal    = $('backDelayVal');
 const autoRefreshToggle = $('autoRefreshToggle');
+const continuousModeToggle = $('continuousModeToggle');
+const continuousDelayMinutesInput = $('continuousDelayMinutesInput');
 const randomEmailOpeningToggle = $('randomEmailOpeningToggle');
 const retryEmailOpeningToggle = $('retryEmailOpeningToggle');
 const manualActivityPauseToggle = $('manualActivityPauseToggle');
@@ -66,6 +68,8 @@ const DEFAULT_SETTINGS = {
   readTime: 4,
   backDelay: 2,
   autoRefresh: true,
+  enableContinuousMode: false,
+  continuousDelayMinutes: 10,
   randomEmailOpening: false,
   retryEmailOpening: true,
   manualActivityPause: true,
@@ -280,6 +284,20 @@ function validateMaxLinksPerEmail(value) {
 
   if (parsed > 3) {
     return 3;
+  }
+
+  return parsed;
+}
+
+function validateContinuousDelayMinutes(value) {
+  const parsed = parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 1;
+  }
+
+  if (parsed > 240) {
+    return 240;
   }
 
   return parsed;
@@ -515,6 +533,18 @@ getProviderCheckboxes().forEach((input) => {
   });
 });
 autoRefreshToggle.addEventListener('change', saveSettings);
+continuousModeToggle.addEventListener('change', async () => {
+  saveSettings();
+
+  if (!continuousModeToggle.checked) {
+    await sendRuntimeMessage({ action: 'STOP_CONTINUOUS_MODE' });
+    log('Continuous mode disabled.', 'info');
+  }
+});
+continuousDelayMinutesInput.addEventListener('input', () => {
+  continuousDelayMinutesInput.value = validateContinuousDelayMinutes(continuousDelayMinutesInput.value);
+  saveSettings();
+});
 randomEmailOpeningToggle.addEventListener('change', saveSettings);
 retryEmailOpeningToggle.addEventListener('change', saveSettings);
 manualActivityPauseToggle.addEventListener('change', saveSettings);
@@ -602,6 +632,8 @@ function getAutomationTemplateSettingsSnapshot() {
     'readTime',
     'backDelay',
     'autoRefresh',
+    'enableContinuousMode',
+    'continuousDelayMinutes',
     'randomEmailOpening',
     'retryEmailOpening',
     'manualActivityPause',
@@ -682,6 +714,8 @@ function applySettingsToControls(templateSettings = {}) {
   backDelaySlider.value = merged.backDelay;
   backDelayVal.textContent = merged.backDelay + 's';
   autoRefreshToggle.checked = Boolean(merged.autoRefresh);
+  continuousModeToggle.checked = Boolean(merged.enableContinuousMode);
+  continuousDelayMinutesInput.value = validateContinuousDelayMinutes(merged.continuousDelayMinutes);
   randomEmailOpeningToggle.checked = Boolean(merged.randomEmailOpening);
   retryEmailOpeningToggle.checked = Boolean(merged.retryEmailOpening);
   manualActivityPauseToggle.checked = Boolean(merged.manualActivityPause);
@@ -767,8 +801,10 @@ function deleteSelectedAutomationTemplate() {
 function getCurrentSettings() {
   const maxEmails = validateMaxEmails(maxEmailsInput.value);
   const maxLinksPerEmail = validateMaxLinksPerEmail(maxLinksPerEmailInput.value);
+  const continuousDelayMinutes = validateContinuousDelayMinutes(continuousDelayMinutesInput.value);
   maxEmailsInput.value = maxEmails;
   maxLinksPerEmailInput.value = maxLinksPerEmail;
+  continuousDelayMinutesInput.value = continuousDelayMinutes;
 
   return {
     selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
@@ -776,6 +812,8 @@ function getCurrentSettings() {
     readTime: parseInt(readTimeSlider.value) || DEFAULT_SETTINGS.readTime,
     backDelay: parseInt(backDelaySlider.value) || DEFAULT_SETTINGS.backDelay,
     autoRefresh: autoRefreshToggle.checked,
+    enableContinuousMode: continuousModeToggle.checked,
+    continuousDelayMinutes,
     randomEmailOpening: randomEmailOpeningToggle.checked,
     retryEmailOpening: retryEmailOpeningToggle.checked,
     manualActivityPause: manualActivityPauseToggle.checked,
@@ -815,6 +853,8 @@ function loadSettings() {
     'readTime',
     'backDelay',
     'autoRefresh',
+    'enableContinuousMode',
+    'continuousDelayMinutes',
     'randomEmailOpening',
     'retryEmailOpening',
     'manualActivityPause',
@@ -858,6 +898,10 @@ function loadSettings() {
     if (data.autoRefresh !== undefined) {
       autoRefreshToggle.checked = data.autoRefresh;
     }
+    continuousModeToggle.checked = data.enableContinuousMode !== undefined ? data.enableContinuousMode : DEFAULT_SETTINGS.enableContinuousMode;
+    continuousDelayMinutesInput.value = validateContinuousDelayMinutes(
+      data.continuousDelayMinutes !== undefined ? data.continuousDelayMinutes : DEFAULT_SETTINGS.continuousDelayMinutes
+    );
     randomEmailOpeningToggle.checked = data.randomEmailOpening !== undefined ? data.randomEmailOpening : DEFAULT_SETTINGS.randomEmailOpening;
     retryEmailOpeningToggle.checked = data.retryEmailOpening !== undefined ? data.retryEmailOpening : DEFAULT_SETTINGS.retryEmailOpening;
     manualActivityPauseToggle.checked = data.manualActivityPause !== undefined ? data.manualActivityPause : DEFAULT_SETTINGS.manualActivityPause;
@@ -1565,7 +1609,7 @@ btnStart.addEventListener('click', async () => {
     'success'
   );
 
-  if (settings.enableAccountSwitching && (settings.selectedAccounts.length === 0 || settings.selectedProviders.length > 1)) {
+  if (settings.enableAccountSwitching && settings.selectedAccounts.length === 0) {
     await refreshAccounts();
     settings.selectedAccounts = getSelectedAccounts();
   }

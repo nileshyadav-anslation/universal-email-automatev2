@@ -5,6 +5,7 @@
   "description": "Automatically open, read, and process unread emails with templates, retry handling, account switching, and safe automation.",
   "permissions": [
     "activeTab",
+    "alarms",
     "proxy",
     "scripting",
     "storage",

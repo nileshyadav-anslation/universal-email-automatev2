@@ -14,9 +14,14 @@ try {
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-07-03-gmail-account-detection-v2';
+const CONTENT_SCRIPT_VERSION = '2026-07-07-yahoo-cold-start-v1';
 const ACTIVITY_LOG_KEY = 'activityLogEntries';
 const MAX_ACTIVITY_LOG_ENTRIES = 200;
+const CONTINUOUS_ALARM_NAME = 'emailReadAutomate.continuousLoop';
+const DEFAULT_CONTINUOUS_DELAY_MINUTES = 10;
+const MIN_CONTINUOUS_DELAY_MINUTES = 1;
+const MAX_CONTINUOUS_DELAY_MINUTES = 240;
+const MAX_CONTINUOUS_START_FAILURES = 3;
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
@@ -101,6 +106,15 @@ function getSelectedProvidersFromSettings(settings = {}) {
       ? settings.selectedProviders
       : [settings.selectedProvider || 'gmail']
   );
+}
+
+function accountIdBelongsToProvider(accountId = '', provider = '') {
+  return String(accountId || '').startsWith(`${provider}:`);
+}
+
+function getProviderSelectedAccounts(settings = {}, provider = '') {
+  return (Array.isArray(settings.selectedAccounts) ? settings.selectedAccounts : [])
+    .filter(accountId => accountIdBelongsToProvider(accountId, provider));
 }
 
 function getProxyApplyMode(settings = {}) {
@@ -194,6 +208,208 @@ async function logProxyEvent(message, level = 'info') {
     level
   }).catch(() => {});
   await addActivityLogEntry(message, level).catch(() => {});
+}
+
+function getContinuousDelayMinutes(settings = {}) {
+  const parsed = parseInt(settings.continuousDelayMinutes, 10);
+
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CONTINUOUS_DELAY_MINUTES;
+  }
+
+  if (parsed < MIN_CONTINUOUS_DELAY_MINUTES) {
+    return MIN_CONTINUOUS_DELAY_MINUTES;
+  }
+
+  if (parsed > MAX_CONTINUOUS_DELAY_MINUTES) {
+    return MAX_CONTINUOUS_DELAY_MINUTES;
+  }
+
+  return parsed;
+}
+
+function isContinuousModeEnabled(settings = {}) {
+  return Boolean(settings.enableContinuousMode);
+}
+
+function getContinuousRunSettings(settings = {}) {
+  const selectedProviders = getSelectedProvidersFromSettings(settings);
+
+  return {
+    ...settings,
+    selectedProvider: selectedProviders[0] || settings.selectedProvider || 'gmail',
+    selectedProviders,
+    currentAccountIndex: 0,
+    sessionOpened: 0
+  };
+}
+
+function getStoredContinuousRunSettings(data = {}) {
+  const storedSettings = data.settings && typeof data.settings === 'object'
+    ? data.settings
+    : {};
+  const hasTopLevelMode = typeof data.enableContinuousMode === 'boolean';
+  const enableContinuousMode = hasTopLevelMode
+    ? data.enableContinuousMode
+    : Boolean(data.continuousModeActive || storedSettings.enableContinuousMode);
+  const continuousDelayMinutes = data.continuousDelayMinutes !== undefined
+    ? data.continuousDelayMinutes
+    : storedSettings.continuousDelayMinutes;
+
+  return getContinuousRunSettings({
+    ...storedSettings,
+    enableContinuousMode,
+    continuousDelayMinutes
+  });
+}
+
+async function logContinuousEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+async function clearContinuousAlarm() {
+  if (!chrome.alarms?.clear) return;
+
+  try {
+    const result = chrome.alarms.clear(CONTINUOUS_ALARM_NAME);
+    if (result && typeof result.then === 'function') {
+      await result;
+    }
+  } catch (error) {
+    console.warn('[Continuous] Failed to clear alarm', error);
+  }
+}
+
+async function createContinuousAlarm(delayMinutes) {
+  if (!chrome.alarms?.create) {
+    throw new Error('Chrome alarms API is not available. Reload the extension after updating manifest permissions.');
+  }
+
+  const result = chrome.alarms.create(CONTINUOUS_ALARM_NAME, {
+    delayInMinutes: delayMinutes
+  });
+
+  if (result && typeof result.then === 'function') {
+    await result;
+  }
+}
+
+async function setContinuousModeActive(settings = {}) {
+  if (!isContinuousModeEnabled(settings)) {
+    await clearContinuousAlarm();
+    await chrome.storage.local.set({
+      enableContinuousMode: false,
+      continuousModeActive: false,
+      continuousNextRunAt: null
+    });
+    return;
+  }
+
+  const runSettings = getContinuousRunSettings(settings);
+  const delayMinutes = getContinuousDelayMinutes(runSettings);
+
+  await clearContinuousAlarm();
+  await chrome.storage.local.set({
+    enableContinuousMode: true,
+    continuousDelayMinutes: delayMinutes,
+    continuousModeActive: true,
+    continuousNextRunAt: null,
+    continuousFailureCount: 0,
+    settings: {
+      ...runSettings,
+      continuousDelayMinutes: delayMinutes
+    }
+  });
+
+  await logContinuousEvent('[Continuous] Enabled. Next cycle will be scheduled after this run finishes.', 'info');
+}
+
+async function stopContinuousMode() {
+  await clearContinuousAlarm();
+  await chrome.storage.local.set({
+    continuousModeActive: false,
+    continuousNextRunAt: null
+  });
+}
+
+async function scheduleContinuousAutomation(settings = {}, reason = 'cycle completed') {
+  if (!isContinuousModeEnabled(settings)) {
+    await stopContinuousMode();
+    return;
+  }
+
+  const runSettings = getContinuousRunSettings(settings);
+  const delayMinutes = getContinuousDelayMinutes(runSettings);
+  const nextRunAt = Date.now() + delayMinutes * 60 * 1000;
+
+  try {
+    await createContinuousAlarm(delayMinutes);
+  } catch (error) {
+    await logContinuousEvent(`[Continuous] Schedule failed: ${error.message}`, 'error');
+    throw error;
+  }
+
+  await chrome.storage.local.set({
+    enableContinuousMode: true,
+    continuousDelayMinutes: delayMinutes,
+    continuousModeActive: true,
+    continuousNextRunAt: nextRunAt,
+    continuousLastReason: reason,
+    settings: {
+      ...runSettings,
+      continuousDelayMinutes: delayMinutes
+    }
+  });
+
+  await logContinuousEvent(`[Continuous] Next cycle scheduled in ${delayMinutes} minute(s).`, 'info');
+}
+
+function shouldScheduleContinuousFromUpdate(stateResult = {}) {
+  if (!stateResult || stateResult.multi === false) return true;
+  return stateResult.automationState === 'idle';
+}
+
+async function maybeScheduleContinuousAfterTerminal(stateResult, terminalState = 'done') {
+  if (!shouldScheduleContinuousFromUpdate(stateResult)) return;
+
+  const data = await getStorage([
+    'settings',
+    'automationState',
+    'continuousModeActive',
+    'enableContinuousMode',
+    'continuousDelayMinutes'
+  ]);
+  const settings = getStoredContinuousRunSettings(data);
+
+  if (data.automationState === 'stopped') return;
+  if (!isContinuousModeEnabled(settings)) return;
+
+  await chrome.storage.local.set({ continuousFailureCount: 0 });
+  await scheduleContinuousAutomation(
+    settings,
+    terminalState === 'error' ? 'cycle ended with error' : 'cycle completed'
+  );
+}
+
+async function handleTerminalAutomationMessage(message = {}, sender = {}, terminalState = 'done') {
+  const provider = message.provider || getProviderFromUrl(sender.tab?.url || '');
+  const logMessage = terminalState === 'error'
+    ? `Error: ${message.message || 'Automation failed'}`
+    : 'All unread emails processed';
+
+  const stateResult = await updateProviderAutomationState(provider, terminalState);
+  await addActivityLogEntry(prefixProviderMessage(logMessage, provider), terminalState === 'error' ? 'error' : 'success');
+  await maybeScheduleContinuousAfterTerminal(stateResult, terminalState);
+
+  return {
+    ok: true,
+    received: true,
+    continuousChecked: true,
+    scheduled: shouldScheduleContinuousFromUpdate(stateResult)
+  };
 }
 
 function isProxyManagerAvailable() {
@@ -419,7 +635,15 @@ async function startAutomationFromBackground(settings = {}) {
     }
   }
 
-  await setAutomationState('running', { settings });
+  await setAutomationState('running', {
+    settings,
+    providerAutomationStates: {
+      [selectedProvider]: 'running'
+    },
+    activeProviderTabs: {
+      [selectedProvider]: tab.id
+    }
+  });
   await delay(500);
 
   const response = await chrome.tabs.sendMessage(tab.id, { action: 'START', settings });
@@ -858,6 +1082,7 @@ async function startProviderAutomationTab(provider, settings = {}, options = {})
   const providerSettings = {
     ...settings,
     selectedProvider: provider,
+    selectedAccounts: getProviderSelectedAccounts(settings, provider),
     currentAccountIndex: 0,
     sessionOpened: 0
   };
@@ -1015,14 +1240,16 @@ async function updateProviderAutomationState(provider, state) {
   const states = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
     ? { ...data.providerAutomationStates }
     : {};
+  const providerKeys = Object.keys(states);
+  const resolvedProvider = provider || (providerKeys.length === 1 ? providerKeys[0] : '');
 
-  if (!provider || !Object.prototype.hasOwnProperty.call(states, provider)) {
+  if (!resolvedProvider || !Object.prototype.hasOwnProperty.call(states, resolvedProvider)) {
     await setAutomationState(state === 'done' || state === 'error' ? 'idle' : state);
     await clearProxyForStop();
     return { multi: false, states };
   }
 
-  states[provider] = state;
+  states[resolvedProvider] = state;
   const nextAutomationState = hasActiveProviderState(states) ? 'running' : 'idle';
   await chrome.storage.local.set({
     providerAutomationStates: states,
@@ -1071,6 +1298,7 @@ async function controlProviderAutomations(action, providers = []) {
   }));
 
   if (action === 'STOP') {
+    await stopContinuousMode();
     await setAutomationState('stopped', { providerAutomationStates });
     await clearProxyForStop();
   } else {
@@ -1086,6 +1314,70 @@ async function controlProviderAutomations(action, providers = []) {
     tabsNotified: tabs.length,
     providerAutomationStates
   };
+}
+
+async function startContinuousAutomationCycle() {
+  const data = await getStorage([
+    'settings',
+    'automationState',
+    'continuousModeActive',
+    'enableContinuousMode',
+    'continuousDelayMinutes',
+    'continuousFailureCount'
+  ]);
+  const settings = getStoredContinuousRunSettings(data);
+
+  if (!isContinuousModeEnabled(settings)) {
+    await stopContinuousMode();
+    return;
+  }
+
+  const liveSessionActive = await isAutomationSessionActive();
+  const stateData = await getStorage(['automationState']);
+  if (liveSessionActive || stateData.automationState === 'running' || stateData.automationState === 'paused') {
+    await logContinuousEvent('[Continuous] Previous cycle is still active. Delaying next cycle.', 'warn');
+    await scheduleContinuousAutomation(settings, 'previous cycle still active');
+    return;
+  }
+
+  const selectedProviders = getSelectedProvidersFromSettings(settings);
+  const starter = selectedProviders.length > 1
+    ? startMultiProviderAutomation
+    : startAutomationFromBackground;
+
+  await chrome.storage.local.set({
+    continuousNextRunAt: null,
+    continuousLastRunAt: Date.now(),
+    settings
+  });
+
+  await logContinuousEvent('[Continuous] Starting next cycle.', 'success');
+
+  try {
+    await starter(settings);
+    await chrome.storage.local.set({ continuousFailureCount: 0 });
+  } catch (error) {
+    const failureCount = (parseInt(data.continuousFailureCount, 10) || 0) + 1;
+    await setAutomationState('idle').catch(() => {});
+    await clearProxyForStop();
+
+    if (failureCount >= MAX_CONTINUOUS_START_FAILURES) {
+      await chrome.storage.local.set({ continuousFailureCount: failureCount });
+      await stopContinuousMode();
+      await logContinuousEvent(
+        `[Continuous] Start failed ${failureCount} time(s): ${error.message}. Continuous mode paused.`,
+        'error'
+      );
+      return;
+    }
+
+    await chrome.storage.local.set({ continuousFailureCount: failureCount });
+    await logContinuousEvent(
+      `[Continuous] Start failed ${failureCount} time(s): ${error.message}. Retrying after delay.`,
+      'error'
+    );
+    await scheduleContinuousAutomation(settings, 'start failed');
+  }
 }
 
 async function openSafeLinkWorkflow(url, originalTabId, windowId) {
@@ -1418,9 +1710,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ERROR') {
-    const provider = message.provider || getProviderFromUrl(sender.tab?.url || '');
-    addActivityLogEntry(prefixProviderMessage(`Error: ${message.message}`, provider), 'error').catch(() => {});
-    updateProviderAutomationState(provider, 'error').catch(() => {});
+    handleTerminalAutomationMessage(message, sender, 'error')
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
   }
 
   if (message.type === 'EMAIL_OPENED') {
@@ -1430,21 +1724,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'DONE') {
-    const provider = message.provider || getProviderFromUrl(sender.tab?.url || '');
-    updateProviderAutomationState(provider, 'done').catch(() => {});
-    addActivityLogEntry(prefixProviderMessage('All unread emails processed', provider), 'success').catch(() => {});
+    handleTerminalAutomationMessage(message, sender, 'done')
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
   }
 
   if (message.action === 'START_AUTOMATION') {
-    const settings = message.settings || {};
+    const settings = getContinuousRunSettings(message.settings || {});
     const selectedProviders = getSelectedProvidersFromSettings(settings);
     const starter = selectedProviders.length > 1
       ? startMultiProviderAutomation
       : startAutomationFromBackground;
 
-    starter(settings)
+    setContinuousModeActive(settings)
+      .then(() => starter(settings))
       .then(sendResponse)
       .catch(async error => {
+        await stopContinuousMode().catch(() => {});
         await setAutomationState('idle').catch(() => {});
         await clearProxyForStop();
         sendResponse({ ok: false, error: error.message });
@@ -1514,6 +1812,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'STOP_CONTINUOUS_MODE') {
+    stopContinuousMode()
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (message.action === 'TEST_PROXY') {
     isAutomationSessionActive()
       .then(active => {
@@ -1554,6 +1860,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+if (chrome.alarms) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name !== CONTINUOUS_ALARM_NAME) return;
+    startContinuousAutomationCycle().catch(error => {
+      logContinuousEvent(`[Continuous] Alarm failed: ${error.message}`, 'error').catch(() => {});
+    });
+  });
+}
+
 // Handle extension install
 chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') {
@@ -1564,6 +1879,8 @@ chrome.runtime.onInstalled.addListener(details => {
       selectedProviders: ['gmail'],
       backDelay: 2,
       autoRefresh: true,
+      enableContinuousMode: false,
+      continuousDelayMinutes: DEFAULT_CONTINUOUS_DELAY_MINUTES,
       randomEmailOpening: false,
       retryEmailOpening: true,
       manualActivityPause: true,
@@ -1593,6 +1910,9 @@ chrome.runtime.onInstalled.addListener(details => {
       selectedAutomationTemplate: '',
       emailsOpened: 0,
       automationState: 'idle',
+      continuousModeActive: false,
+      continuousNextRunAt: null,
+      continuousFailureCount: 0,
       providerAutomationStates: {},
       activeProviderTabs: {}
     });

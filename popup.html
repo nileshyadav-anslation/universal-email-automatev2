@@ -212,6 +212,38 @@
 
       <div class="setting-row">
         <div class="setting-info">
+          <span class="setting-name">Continuous Mode</span>
+          <span class="setting-desc">Start the next cycle after a delay</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="continuousModeToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Loop Delay</span>
+          <span class="setting-desc">Minutes before the next cycle</span>
+        </div>
+        <div class="setting-control">
+          <input
+            type="number"
+            id="continuousDelayMinutesInput"
+            min="1"
+            max="240"
+            value="10"
+            class="batch-select"
+          />
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
           <span class="setting-name">Random Email Opening</span>
           <span class="setting-desc">Open unread emails in random order</span>
         </div>

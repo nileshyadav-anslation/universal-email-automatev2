@@ -170,6 +170,48 @@
       return uniqueAccounts(accounts);
     }
 
+    async function waitForAccountUiReady(maxWait = 10000) {
+      const start = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        const accountButton = document.querySelector("#ybarAccountMenu");
+        if (accountButton && (getActiveEmail() || document.readyState === "complete")) {
+          return true;
+        }
+
+        if (deps.getState() === "stopped") return false;
+        await deps.sleep(250);
+      }
+
+      return Boolean(document.querySelector("#ybarAccountMenu"));
+    }
+
+    async function waitForStableAccounts(maxWait = 7000) {
+      const start = Date.now();
+      let bestAccounts = [];
+      let bestCount = 0;
+      let stableSince = Date.now();
+
+      while (Date.now() - start < maxWait) {
+        const accounts = getAccountsFromDom();
+
+        if (accounts.length > bestCount) {
+          bestAccounts = accounts;
+          bestCount = accounts.length;
+          stableSince = Date.now();
+        }
+
+        if (accounts.length > 0 && Date.now() - stableSince > 1200 && Date.now() - start > 2500) {
+          return accounts;
+        }
+
+        if (deps.getState() === "stopped") break;
+        await deps.sleep(200);
+      }
+
+      return bestAccounts.length ? bestAccounts : getAccountsFromDom();
+    }
+
     async function openAccountMenu() {
       const button = document.querySelector("#ybarAccountMenu");
       if (!button) return null;
@@ -247,14 +289,16 @@
     async function discoverAccounts() {
       if (!isProvider()) return [];
 
+      await waitForAccountUiReady();
       let accounts = getAccountsFromDom();
       if (accounts.length > 1) {
+        accounts = await waitForStableAccounts(3500);
         closeAccountMenu();
         return accounts;
       }
 
       await ensureAccountSwitcherOpen();
-      accounts = getAccountsFromDom();
+      accounts = await waitForStableAccounts();
       closeAccountMenu();
 
       if (accounts.length <= 1) {
@@ -281,7 +325,9 @@
     async function switchAccount(account) {
       if (!isProvider()) return { ok: false, error: "Yahoo account switching is only available in Yahoo Mail." };
 
+      await waitForAccountUiReady();
       await ensureAccountSwitcherOpen();
+      await waitForStableAccounts();
       const target = getAccountLinks().find((link) => accountMatchesLink(account, link));
 
       if (!target) {
