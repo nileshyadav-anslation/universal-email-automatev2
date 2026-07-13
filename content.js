@@ -370,6 +370,8 @@ zoho: {
     randomEmailOpening: false,
     retryEmailOpening: true,
     manualActivityPause: true,
+    processGmailPromotions: true,
+    gmailPromotionsPageLimit: 1,
     maxEmails: 20,
     maxLinksPerEmail: 1,
     enableLinkOpening: true,
@@ -2436,6 +2438,331 @@ zoho: {
     return unreadRows;
   }
 
+  function normalizeInboxLabText(value = "") {
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function getInboxLabJob() {
+    const job = settings.inboxLabJob;
+    if (!job || typeof job !== "object" || !job.id) return null;
+    return job;
+  }
+
+  function getInboxLabJobFolder(job = {}) {
+    const text = normalizeInboxLabText(`${job.folder || ""} ${job.instructions || ""}`);
+
+    if (text.includes("promotion")) return "promotions";
+    if (text.includes("spam") || text.includes("junk")) return "spam";
+    return "inbox";
+  }
+
+  function getInboxLabFolderLabel(folder = "inbox") {
+    if (folder === "promotions") return "Promotions";
+    if (folder === "spam") return "Spam";
+    return "Inbox";
+  }
+
+  function getInboxLabProviderFolder(job = {}) {
+    const folder = getInboxLabJobFolder(job);
+
+    if (folder === "promotions" && !isGmailProvider()) {
+      return "inbox";
+    }
+
+    return folder;
+  }
+
+  function getInboxLabProviderLabel() {
+    return getProviderDisplayLabel();
+  }
+
+  function inboxLabJobWantsLinkClick(job = {}) {
+    const text = normalizeInboxLabText(`${job.instructions || ""} ${job.action || ""}`);
+    return text.includes("click") && text.includes("link");
+  }
+
+  function getVisibleMailboxRows() {
+    if (!provider) return [];
+
+    const selectors = provider.inboxSelectors || provider.unreadSelectors || [];
+    const rows = [];
+    const seen = new Set();
+
+    for (const selector of selectors) {
+      Array.from(document.querySelectorAll(selector)).forEach((row) => {
+        const normalizedRow = normalizeEmailRow(row);
+        if (normalizedRow && !seen.has(normalizedRow) && isVisibleMailElement(normalizedRow)) {
+          rows.push(normalizedRow);
+          seen.add(normalizedRow);
+        }
+      });
+    }
+
+    return rows;
+  }
+
+  function getEmailSender(row) {
+    if (!row) return "";
+
+    const senderSelectors = [
+      ".yW span[email]",
+      ".yW span[name]",
+      ".bA4 span[email]",
+      ".bA4 span[name]",
+      "[email]",
+      "[name]",
+    ];
+
+    for (const selector of senderSelectors) {
+      const element = row.querySelector(selector);
+      const value =
+        element?.getAttribute("email") ||
+        element?.getAttribute("name") ||
+        element?.getAttribute("title") ||
+        element?.textContent ||
+        "";
+
+      if (String(value).trim()) return String(value).trim();
+    }
+
+    return "";
+  }
+
+  function inboxLabRowMatchesJob(row, job = {}) {
+    const targetSubject = normalizeInboxLabText(job.subject || "");
+    if (!targetSubject) return false;
+
+    const rowSubject = normalizeInboxLabText(getEmailSubject(row));
+    const rowText = normalizeInboxLabText(`${getEmailSender(row)} ${rowSubject} ${row?.textContent || ""}`);
+    const subjectMatches = rowSubject.includes(targetSubject) || rowText.includes(targetSubject);
+
+    if (!subjectMatches) return false;
+
+    const targetSender = normalizeInboxLabText(job.sender || "");
+    if (!targetSender) return true;
+
+    return rowText.includes(targetSender) || subjectMatches;
+  }
+
+  async function waitForVisibleMailboxRows(maxWait = 10000) {
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      const rows = getVisibleMailboxRows();
+      if (rows.length) return rows;
+      if (state === "stopped") return [];
+      await sleep(400);
+    }
+
+    return getVisibleMailboxRows();
+  }
+
+  async function scrollInboxLabMailboxUntilJobRow(job = {}) {
+    if (!isScrollableMailboxProvider()) return null;
+
+    const scrollElement = getYahooMailboxScrollElement();
+    if (!scrollElement) return null;
+
+    const maxScrolls = 14;
+    let lastTop = scrollElement.scrollTop;
+
+    for (let i = 0; i < maxScrolls; i++) {
+      if (state === "stopped") return null;
+
+      const matchedRow = getVisibleMailboxRows().find((row) => inboxLabRowMatchesJob(row, job));
+      if (matchedRow) return matchedRow;
+
+      const distance = Math.max(300, Math.floor((scrollElement.clientHeight || window.innerHeight) * 0.85));
+      scrollElement.scrollBy({ top: distance, behavior: "auto" });
+      await sleep(700);
+
+      const currentTop = scrollElement.scrollTop;
+      const nearBottom = currentTop + scrollElement.clientHeight >= scrollElement.scrollHeight - 8;
+      const nextMatch = getVisibleMailboxRows().find((row) => inboxLabRowMatchesJob(row, job));
+      if (nextMatch) return nextMatch;
+      if (nearBottom || currentTop === lastTop) return null;
+
+      lastTop = currentTop;
+    }
+
+    return getVisibleMailboxRows().find((row) => inboxLabRowMatchesJob(row, job)) || null;
+  }
+
+  async function findInboxLabJobRow(job = {}, maxPages = 3) {
+    for (let page = 0; page < maxPages; page++) {
+      const rows = await waitForVisibleMailboxRows(page === 0 ? 12000 : 7000);
+      const matchedRow = rows.find((row) => inboxLabRowMatchesJob(row, job));
+
+      if (matchedRow) return matchedRow;
+      if (state === "stopped") return null;
+
+      if (!isGmailProvider()) {
+        return scrollInboxLabMailboxUntilJobRow(job);
+      }
+
+      const hasNextPage = isGmailProvider() ? await goToNextGmailPage() : false;
+      if (!hasNextPage) break;
+    }
+
+    return null;
+  }
+
+  async function navigateToInboxLabMailbox(folder = "inbox") {
+    if (isGmailProvider()) {
+      return navigateToGmailMailbox(folder);
+    }
+
+    const mailboxProvider = getMailboxProvider();
+    if (!mailboxProvider || !mailboxProvider.navigateMailbox) return false;
+
+    await mailboxProvider.navigateMailbox(folder === "spam" ? "spam" : "inbox");
+    if (isScrollableMailboxProvider()) {
+      await resetYahooMailboxScrollPosition();
+    }
+    return true;
+  }
+
+  async function navigateToGmailSearchForJob(job = {}, folder = "inbox") {
+    const accountIndex = getGmailAccountIndex();
+    const queryParts = [];
+
+    if (folder === "promotions") queryParts.push("category:promotions");
+    if (folder === "spam") queryParts.push("in:spam");
+    if (job.sender) queryParts.push(`from:${job.sender}`);
+    if (job.subject) queryParts.push(`subject:\"${String(job.subject).replace(/"/g, '\\"')}\"`);
+
+    const query = queryParts.join(" ").trim() || String(job.subject || "");
+    window.location.href = `https://mail.google.com/mail/u/${accountIndex}/#search/${encodeURIComponent(query)}`;
+    await waitForInbox(15000);
+    await sleep(1500);
+  }
+
+  async function postInboxLabJobResult(job, result) {
+    const response = await sendRuntimeMessage({
+      action: "INBOX_LAB_JOB_RESULT",
+      provider: providerName,
+      job,
+      result,
+    });
+
+    if (!response || !response.ok) {
+      log(`[InboxLab] Result post failed: ${response?.error || "Unknown error"}`, "error");
+      return false;
+    }
+
+    log("[InboxLab] Result posted", "success");
+    return true;
+  }
+
+  async function runInboxLabProviderJob(job) {
+    const folder = getInboxLabProviderFolder(job);
+    const folderLabel = getInboxLabFolderLabel(folder);
+    const providerLabel = getInboxLabProviderLabel();
+
+    if (!getMailboxProvider()) {
+      return {
+        status: "failed",
+        folder,
+        subject: job.subject || "",
+        account_email: job.account_email || "",
+        summary: "Inbox Lab jobs are not supported for this provider.",
+        error: "unsupported_provider",
+      };
+    }
+
+    log(`[InboxLab] Running ${providerLabel} job ${job.id}${job.subject ? `: ${job.subject}` : ""}`, "info");
+    if (getInboxLabJobFolder(job) === "promotions" && folder !== "promotions") {
+      log(`[InboxLab] ${providerLabel} has no Promotions category. Using Inbox.`, "warn");
+    }
+    log(`[InboxLab] Opening ${providerLabel} ${folderLabel}`, "info");
+    await navigateToInboxLabMailbox(folder);
+
+    let row = await findInboxLabJobRow(job, 3);
+
+    if (!row && job.subject && isGmailProvider()) {
+      log(`[InboxLab] Job email not visible in ${folderLabel}. Searching Gmail...`, "warn");
+      await navigateToGmailSearchForJob(job, folder);
+      row = await findInboxLabJobRow(job, 2);
+    } else if (!row && job.subject && isScrollableMailboxProvider()) {
+      log(`[InboxLab] Job email not visible in ${folderLabel} after scrolling ${providerLabel}.`, "warn");
+    }
+
+    if (!row) {
+      return {
+        status: "failed",
+        folder,
+        subject: job.subject || "",
+        account_email: job.account_email || "",
+        summary: `Email not found in ${folderLabel}.`,
+        error: "not_found",
+      };
+    }
+
+    const rowId = getEmailIdentity(row) || `inboxlab:${job.id}`;
+    const subject = getEmailSubject(row);
+    log(`[InboxLab] Opening ${providerLabel} job email from ${folderLabel}: "${subject}"`, "info");
+
+    const opened = await openEmailWithRetry(row, subject, rowId, folderLabel);
+    if (!opened) {
+      return {
+        status: "failed",
+        folder,
+        subject,
+        account_email: job.account_email || "",
+        summary: `Email found in ${folderLabel}, but could not be opened.`,
+        error: "open_failed",
+      };
+    }
+
+    log("[InboxLab] Job email opened", "success");
+    processedHrefs.add(getProcessedCacheKey(rowId));
+    emailsOpened++;
+    sendMsg("EMAIL_OPENED", { count: emailsOpened, subject });
+
+    const wantsLinkClick = inboxLabJobWantsLinkClick(job);
+    const originalLinkOpening = settings.enableLinkOpening;
+    if (wantsLinkClick) {
+      settings.enableLinkOpening = true;
+    }
+
+    let processedResult;
+    try {
+      processedResult = await processOpenedEmail(rowId);
+    } finally {
+      settings.enableLinkOpening = originalLinkOpening;
+    }
+
+    await markOpenedMailboxEmailRead(rowId);
+
+    const linksOpened = processedResult?.linksOpened || 0;
+    if (wantsLinkClick && linksOpened < 1) {
+      return {
+        status: "failed",
+        folder,
+        subject,
+        account_email: job.account_email || "",
+        summary: `Email found in ${folderLabel} and opened, but no link was clicked.`,
+        error: "link_click_failed",
+        linksOpened,
+        replied: Boolean(processedResult?.replied),
+      };
+    }
+
+    const actionSummary = linksOpened > 0
+      ? `Email found in ${folderLabel}, opened, and clicked.`
+      : `Email found in ${folderLabel} and opened.`;
+
+    return {
+      status: "completed",
+      folder,
+      subject,
+      account_email: job.account_email || "",
+      summary: actionSummary,
+      linksOpened,
+      replied: Boolean(processedResult?.replied),
+    };
+  }
+
   async function runAutomation() {
     activeAccount = getActiveAccount();
     let accountEmailsOpened = 0;
@@ -2467,9 +2794,38 @@ zoho: {
       log(isGmailProvider() ? "Scanning Gmail Spam first, then Inbox…" : "Scanning for unread emails...");
     }
 
+    const inboxLabJob = getInboxLabJob();
+    if (inboxLabJob) {
+      const result = await runInboxLabProviderJob(inboxLabJob);
+      await postInboxLabJobResult(inboxLabJob, result);
+      state = "idle";
+      sendMsg("DONE", { inboxLabJobId: inboxLabJob.id });
+      log("Automation complete.", "success");
+      return;
+    }
+
     async function processCurrentMailbox(mailboxLabel) {
       let cycle = 0;
       const MAX_CYCLES = 5;
+      const GMAIL_PROMOTIONS_MAX_PAGES = Math.min(
+        10,
+        Math.max(1, parseInt(settings.gmailPromotionsPageLimit, 10) || 1)
+      );
+      const gmailPromotionsPageLimited = isGmailProvider() && mailboxLabel === "Promotions";
+      let gmailPagesVisited = 1;
+
+      async function goToNextGmailPageWithinLimit() {
+        if (gmailPromotionsPageLimited && gmailPagesVisited >= GMAIL_PROMOTIONS_MAX_PAGES) {
+          log(`Reached Gmail Promotions page limit (${GMAIL_PROMOTIONS_MAX_PAGES} pages). Switching to next mailbox.`, "success");
+          return false;
+        }
+
+        const hasNextPage = await goToNextGmailPage();
+        if (hasNextPage) {
+          gmailPagesVisited++;
+        }
+        return hasNextPage;
+      }
 
       while (state === "running" && cycle < MAX_CYCLES) {
         cycle++;
@@ -2493,7 +2849,7 @@ zoho: {
           }
 
           if (isGmailProvider()) {
-            const hasNextPage = await goToNextGmailPage();
+            const hasNextPage = await goToNextGmailPageWithinLimit();
             if (hasNextPage) {
               cycle = 0;
               continue;
@@ -2526,7 +2882,7 @@ zoho: {
               }
 
               if (isGmailProvider()) {
-                const hasNextAfterRefresh = await goToNextGmailPage();
+                const hasNextAfterRefresh = await goToNextGmailPageWithinLimit();
                 if (hasNextAfterRefresh) {
                   cycle = 0;
                   continue;
@@ -2741,7 +3097,13 @@ zoho: {
     }
 
     if (isGmailProvider()) {
-      const gmailMailboxes = getGmailProvider().getMailboxes();
+      const processPromotions = settings.processGmailPromotions !== false;
+      const gmailMailboxes = getGmailProvider().getMailboxes()
+        .filter((mailbox) => processPromotions || mailbox.folder !== "promotions");
+
+      if (!processPromotions) {
+        log("Skipping Gmail Promotions by settings", "info");
+      }
 
       for (const mailbox of gmailMailboxes) {
         if (state !== "running" || accountLimitReached) break;
@@ -2832,8 +3194,19 @@ zoho: {
         currentAccountIndex: msg.settings?.currentAccountIndex || 0,
         sessionOpened: msg.settings?.sessionOpened || 0,
       };
-      runAutomation().catch((err) => {
+      runAutomation().catch(async (err) => {
         console.error("[EmailReadAutomate] Error:", err);
+        const inboxLabJob = getInboxLabJob();
+        if (inboxLabJob) {
+          await postInboxLabJobResult(inboxLabJob, {
+            status: "failed",
+            folder: getInboxLabProviderFolder(inboxLabJob),
+            subject: inboxLabJob.subject || "",
+            account_email: inboxLabJob.account_email || "",
+            summary: `Inbox Lab job failed: ${err.message}`,
+            error: err.message || "automation_error",
+          });
+        }
         state = "idle";
         sendMsg("ERROR", { message: err.message });
       });

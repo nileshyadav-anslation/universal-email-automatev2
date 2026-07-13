@@ -22,6 +22,15 @@ const DEFAULT_CONTINUOUS_DELAY_MINUTES = 10;
 const MIN_CONTINUOUS_DELAY_MINUTES = 1;
 const MAX_CONTINUOUS_DELAY_MINUTES = 240;
 const MAX_CONTINUOUS_START_FAILURES = 3;
+const DEFAULT_BACKEND_BASE_URL = 'http://10.5.56.133:3000/api/anslation/product-api/knproducts/kncampaignastra/knemailastra/inbox-lab';
+const DEFAULT_BACKEND_CONNECTOR_ID = 'inbox-connector-mrdbbh2d-0pnehvxo';
+const DEFAULT_BACKEND_TOKEN = 'inboxlab_5tsdxevkmrdbbh2ekjemcy';
+const DEFAULT_BACKEND_ACCOUNT = 'barjrajkumar451@gmail.com';
+const LEGACY_BACKEND_BASE_URLS = [
+  'http://10.5.56.133:8000/api/knproducts/kncampaignastra/knemailastra/inbox-lab'
+];
+const LEGACY_BACKEND_CONNECTOR_IDS = ['extension-system-1'];
+const LEGACY_BACKEND_TOKENS = ['inboxlab_5tsdxevkmrddbbh2ekjemcy'];
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
@@ -197,6 +206,412 @@ async function addActivityLogEntry(message, level = 'info') {
   await chrome.storage.local.set({
     [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
   });
+}
+
+async function logInboxLabEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({
+    type: 'LOG',
+    message,
+    level
+  }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+function normalizeBackendValue(value, fallback, legacyValues = []) {
+  const normalized = String(value || '').trim();
+  return !normalized || legacyValues.includes(normalized) ? fallback : normalized;
+}
+
+function normalizeBackendConnectorConfig(config = {}) {
+  return {
+    baseUrl: normalizeBackendValue(config.baseUrl || config.backendBaseUrl, DEFAULT_BACKEND_BASE_URL, LEGACY_BACKEND_BASE_URLS),
+    connectorId: normalizeBackendValue(config.connectorId || config.backendConnectorId, DEFAULT_BACKEND_CONNECTOR_ID, LEGACY_BACKEND_CONNECTOR_IDS),
+    token: normalizeBackendValue(config.token || config.backendToken, DEFAULT_BACKEND_TOKEN, LEGACY_BACKEND_TOKENS),
+    account: normalizeBackendValue(config.account || config.backendAccount, DEFAULT_BACKEND_ACCOUNT),
+  };
+}
+
+async function migrateStoredBackendConnectorDefaults() {
+  const data = await getStorage([
+    'backendBaseUrl',
+    'backendConnectorId',
+    'backendToken',
+    'backendAccount'
+  ]);
+  const next = normalizeBackendConnectorConfig(data);
+  const current = {
+    backendBaseUrl: String(data.backendBaseUrl || '').trim(),
+    backendConnectorId: String(data.backendConnectorId || '').trim(),
+    backendToken: String(data.backendToken || '').trim(),
+    backendAccount: String(data.backendAccount || '').trim(),
+  };
+
+  if (
+    current.backendBaseUrl === next.baseUrl &&
+    current.backendConnectorId === next.connectorId &&
+    current.backendToken === next.token &&
+    current.backendAccount === next.account
+  ) {
+    return;
+  }
+
+  await chrome.storage.local.set({
+    backendBaseUrl: next.baseUrl,
+    backendConnectorId: next.connectorId,
+    backendToken: next.token,
+    backendAccount: next.account,
+    backendConnectionStatus: 'Not tested',
+    backendLastError: '',
+  });
+}
+
+function sanitizeBackendError(error = '') {
+  const message = String(error || 'Connection failed');
+  return message.length > 180 ? `${message.slice(0, 177)}...` : message;
+}
+
+async function readBackendResponseSnippet(response) {
+  try {
+    const text = await response.text();
+    return sanitizeBackendError(text.replace(/\s+/g, ' ').trim());
+  } catch (error) {
+    return '';
+  }
+}
+
+async function fetchBackendWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function testBackendConnector(config = {}) {
+  const backend = normalizeBackendConnectorConfig(config);
+
+  if (!backend.baseUrl || !backend.connectorId || !backend.token || !backend.account) {
+    return { ok: false, error: 'Backend URL, Connector ID, Token, and Account are required' };
+  }
+
+  const headers = {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${backend.token}`,
+    'X-Connector-ID': backend.connectorId,
+    'X-InboxLab-Token': backend.token,
+    'X-InboxLab-Account': backend.account,
+    'X-Account-Email': backend.account,
+  };
+  const payload = {
+    connectorId: backend.connectorId,
+    token: backend.token,
+    account: backend.account,
+    accountEmail: backend.account,
+    source: 'chrome-extension',
+    event: 'connect_test',
+    timestamp: new Date().toISOString(),
+  };
+  const attempts = [
+    {
+      method: 'POST',
+      options: {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      },
+    },
+    {
+      method: 'GET',
+      options: {
+        method: 'GET',
+        headers,
+      },
+    },
+  ];
+  let lastFailure = 'Connection failed';
+
+  for (const attempt of attempts) {
+    try {
+      const response = await fetchBackendWithTimeout(backend.baseUrl, attempt.options);
+      const responseSnippet = await readBackendResponseSnippet(response);
+
+      if (response.ok) {
+        await chrome.storage.local.set({
+          backendBaseUrl: backend.baseUrl,
+          backendConnectorId: backend.connectorId,
+          backendToken: backend.token,
+          backendAccount: backend.account,
+          backendConnectionStatus: 'Online',
+          backendLastCheck: new Date().toISOString(),
+          backendLastError: '',
+        });
+        return {
+          ok: true,
+          status: response.status,
+          method: attempt.method,
+        };
+      }
+
+      lastFailure = `HTTP ${response.status}${responseSnippet ? `: ${responseSnippet}` : ''}`;
+    } catch (error) {
+      lastFailure = error.name === 'AbortError'
+        ? 'Connection timed out'
+        : (error.message || 'Connection failed');
+    }
+  }
+
+  const safeError = sanitizeBackendError(lastFailure);
+  await chrome.storage.local.set({
+    backendConnectionStatus: 'Offline',
+    backendLastCheck: new Date().toISOString(),
+    backendLastError: safeError,
+  });
+  return { ok: false, error: safeError };
+}
+
+function buildInboxLabUrl(baseUrl = '', path = '') {
+  const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+  const suffix = String(path || '').trim();
+  return `${base}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+function buildInboxLabHeaders(backend = {}) {
+  return {
+    Accept: 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${backend.token}`,
+    'X-Connector-ID': backend.connectorId,
+    'X-InboxLab-Token': backend.token,
+    'X-InboxLab-Account': backend.account,
+    'X-Account-Email': backend.account,
+  };
+}
+
+async function getBackendConnectorConfig(overrides = {}) {
+  const stored = await getStorage([
+    'backendBaseUrl',
+    'backendConnectorId',
+    'backendToken',
+    'backendAccount'
+  ]);
+
+  return normalizeBackendConnectorConfig({
+    ...stored,
+    ...overrides
+  });
+}
+
+async function readBackendJson(response) {
+  const text = await response.text().catch(() => '');
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    return { raw: text };
+  }
+}
+
+function normalizeInboxLabJob(rawJob = {}) {
+  const source = rawJob?.job || rawJob?.data?.job || rawJob?.data || rawJob;
+  if (!source || typeof source !== 'object') return null;
+
+  const id = source.id || source.job_id || source.jobId;
+  if (!id) return null;
+
+  return {
+    id: String(id),
+    provider: String(source.provider || '').trim(),
+    account_email: extractEmail(source.account_email || source.accountEmail || source.account || ''),
+    subject: String(source.subject || '').trim(),
+    sender: String(source.sender || source.from || '').trim(),
+    instructions: String(source.instructions || source.instruction || source.action || '').trim(),
+    folder: String(source.folder || source.mailbox || '').trim(),
+    raw: source
+  };
+}
+
+async function claimInboxLabJob(config = {}) {
+  const backend = await getBackendConnectorConfig(config);
+
+  if (!backend.baseUrl || !backend.connectorId || !backend.token) {
+    throw new Error('Inbox Lab connector settings are missing');
+  }
+
+  const url = buildInboxLabUrl(
+    backend.baseUrl,
+    `/jobs/claim?connector_id=${encodeURIComponent(backend.connectorId)}&token=${encodeURIComponent(backend.token)}`
+  );
+
+  await logInboxLabEvent('[InboxLab] Claiming job', 'info');
+
+  const response = await fetchBackendWithTimeout(url, {
+    method: 'GET',
+    headers: buildInboxLabHeaders(backend),
+  });
+
+  if (response.status === 204) {
+    await chrome.storage.local.set({ activeInboxLabJob: null });
+    await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    return null;
+  }
+
+  const body = await readBackendJson(response);
+
+  if (!response.ok) {
+    const message = sanitizeBackendError(body.detail || body.error || body.message || body.raw || `HTTP ${response.status}`);
+    throw new Error(`Inbox Lab claim failed: ${message}`);
+  }
+
+  const job = normalizeInboxLabJob(body);
+  if (!job) {
+    await chrome.storage.local.set({ activeInboxLabJob: null });
+    await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    return null;
+  }
+
+  await chrome.storage.local.set({
+    activeInboxLabJob: job,
+    backendConnectionStatus: 'Online',
+    backendLastCheck: new Date().toISOString(),
+    backendLastError: '',
+  });
+  await logInboxLabEvent(`[InboxLab] Claimed job ${job.id}${job.subject ? `: ${job.subject}` : ''}`, 'success');
+
+  return job;
+}
+
+async function postInboxLabJobResult(job = {}, result = {}, config = {}) {
+  const normalizedJob = normalizeInboxLabJob(job);
+  if (!normalizedJob?.id) {
+    return { ok: false, error: 'Inbox Lab job id is missing' };
+  }
+
+  const backend = await getBackendConnectorConfig(config);
+  const url = buildInboxLabUrl(backend.baseUrl, `/jobs/${encodeURIComponent(normalizedJob.id)}/result`);
+  const payload = {
+    connector_id: backend.connectorId,
+    token: backend.token,
+    status: result.status || 'completed',
+    folder: result.folder || normalizedJob.folder || '',
+    summary: result.summary || '',
+    provider: result.provider || normalizedJob.provider || '',
+    account_email: result.account_email || normalizedJob.account_email || backend.account,
+    subject: result.subject || normalizedJob.subject || '',
+    links_opened: Number.isFinite(result.linksOpened) ? result.linksOpened : undefined,
+    replied: typeof result.replied === 'boolean' ? result.replied : undefined,
+    error: result.error || undefined,
+  };
+
+  const response = await fetchBackendWithTimeout(url, {
+    method: 'POST',
+    headers: buildInboxLabHeaders(backend),
+    body: JSON.stringify(payload),
+  });
+  const body = await readBackendJson(response);
+
+  if (!response.ok) {
+    const message = sanitizeBackendError(body.detail || body.error || body.message || body.raw || `HTTP ${response.status}`);
+    await logInboxLabEvent(`[InboxLab] Result post failed: ${message}`, 'error');
+    return { ok: false, error: message, status: response.status };
+  }
+
+  await chrome.storage.local.set({
+    activeInboxLabJob: null,
+    backendConnectionStatus: 'Online',
+    backendLastCheck: new Date().toISOString(),
+    backendLastError: '',
+  });
+  await logInboxLabEvent(`[InboxLab] Result posted for job ${normalizedJob.id}`, 'success');
+  return { ok: true, status: response.status, body };
+}
+
+async function postActiveInboxLabJobFailure(error, provider = '') {
+  const data = await getStorage(['activeInboxLabJob']);
+  const job = normalizeInboxLabJob(data.activeInboxLabJob || {});
+  if (!job?.id) return;
+  if (provider && job.provider && job.provider !== provider) return;
+
+  await postInboxLabJobResult(job, {
+    status: 'failed',
+    provider: job.provider || provider || '',
+    folder: job.folder || '',
+    subject: job.subject || '',
+    account_email: job.account_email || '',
+    summary: `Inbox Lab job failed before automation completed: ${error.message || error}`,
+    error: error.message || String(error || 'automation_start_failed'),
+  }).catch(resultError => {
+    console.warn('[InboxLab] Failed to post start failure result', resultError);
+  });
+}
+
+async function prepareInboxLabJobSettings(provider = '', settings = {}) {
+  if (!MULTI_PROVIDER_IDS.includes(provider)) return settings;
+
+  let job = null;
+
+  try {
+    job = await claimInboxLabJob(settings);
+  } catch (error) {
+    await chrome.storage.local.set({
+      activeInboxLabJob: null,
+      backendLastError: sanitizeBackendError(error.message || error),
+    }).catch(() => {});
+    await logInboxLabEvent(`[InboxLab] Job claim failed. Running normal ${getProviderLabel(provider)} automation. ${error.message || error}`, 'warn');
+    return {
+      ...settings,
+      inboxLabJob: null,
+    };
+  }
+
+  if (!job) {
+    await logInboxLabEvent(`[InboxLab] No job claimed. Running normal ${getProviderLabel(provider)} automation.`, 'info');
+    return {
+      ...settings,
+      inboxLabJob: null,
+    };
+  }
+
+  job = {
+    ...job,
+    provider
+  };
+  await chrome.storage.local.set({ activeInboxLabJob: job }).catch(() => {});
+
+  const nextSettings = {
+    ...settings,
+    selectedProvider: provider,
+    inboxLabJob: job,
+  };
+
+  if (job.account_email) {
+    const data = await getStorage(['discoveredAccounts']);
+    const discoveredAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
+    const targetAccount = discoveredAccounts.find(account => {
+      if (!account || !String(account.id || '').startsWith(`${provider}:`)) return false;
+      return extractEmail(`${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`) === job.account_email;
+    });
+
+    if (targetAccount?.id) {
+      nextSettings.enableAccountSwitching = true;
+      nextSettings.selectedAccounts = [targetAccount.id];
+      nextSettings.currentAccountIndex = 0;
+      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account: ${job.account_email}`, 'info');
+    } else {
+      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account not found in discovered accounts: ${job.account_email}`, 'warn');
+    }
+  }
+
+  return nextSettings;
 }
 
 async function logProxyEvent(message, level = 'info') {
@@ -587,6 +1002,7 @@ async function getOrCreateMailTab(provider = 'gmail') {
 
 async function startAutomationFromBackground(settings = {}) {
   const selectedProvider = settings.selectedProvider || 'gmail';
+  settings = await prepareInboxLabJobSettings(selectedProvider, settings);
   let proxyPreparedBeforeOpen = false;
   const proxyMode = getProxyApplyMode(settings);
 
@@ -1079,13 +1495,14 @@ async function discoverAccountsForProviders(providers = [], options = {}) {
 }
 
 async function startProviderAutomationTab(provider, settings = {}, options = {}) {
-  const providerSettings = {
+  let providerSettings = {
     ...settings,
     selectedProvider: provider,
     selectedAccounts: getProviderSelectedAccounts(settings, provider),
     currentAccountIndex: 0,
     sessionOpened: 0
   };
+  providerSettings = await prepareInboxLabJobSettings(provider, providerSettings);
 
   const tab = await getOrCreateMailTab(provider);
 
@@ -1166,6 +1583,7 @@ async function startMultiProviderAutomation(settings = {}) {
       chrome.runtime.sendMessage({ type: 'LOG', message, level: 'success', provider }).catch(() => {});
       addActivityLogEntry(message, 'success').catch(() => {});
     } catch (error) {
+      await postActiveInboxLabJobFailure(error, provider);
       providerAutomationStates[provider] = 'error';
       const warning = provider === 'aol'
         ? 'AOL requires manual login. Please sign in manually, then restart AOL automation.'
@@ -1742,6 +2160,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(() => starter(settings))
       .then(sendResponse)
       .catch(async error => {
+        if (selectedProviders.length === 1) {
+          await postActiveInboxLabJobFailure(error, selectedProviders[0]);
+        }
         await stopContinuousMode().catch(() => {});
         await setAutomationState('idle').catch(() => {});
         await clearProxyForStop();
@@ -1784,6 +2205,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'CLEAR_PROCESSED_HISTORY') {
     clearProcessedHistory()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'TEST_BACKEND_CONNECTOR') {
+    testBackendConnector(message.backend || {})
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'INBOX_LAB_JOB_RESULT') {
+    postInboxLabJobResult(message.job || {}, message.result || {}, message.backend || {})
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));
 
@@ -1877,6 +2314,11 @@ chrome.runtime.onInstalled.addListener(details => {
       readTime: 4,
       selectedProvider: 'gmail',
       selectedProviders: ['gmail'],
+      backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
+      backendConnectorId: DEFAULT_BACKEND_CONNECTOR_ID,
+      backendToken: DEFAULT_BACKEND_TOKEN,
+      backendAccount: DEFAULT_BACKEND_ACCOUNT,
+      backendConnectionStatus: 'Not tested',
       backDelay: 2,
       autoRefresh: true,
       enableContinuousMode: false,
@@ -1884,6 +2326,8 @@ chrome.runtime.onInstalled.addListener(details => {
       randomEmailOpening: false,
       retryEmailOpening: true,
       manualActivityPause: true,
+      processGmailPromotions: true,
+      gmailPromotionsPageLimit: 1,
       maxEmails: 10,
       maxLinksPerEmail: 1,
       enableLinkOpening: true,
@@ -1919,7 +2363,17 @@ chrome.runtime.onInstalled.addListener(details => {
 
     // Open Gmail on first install
     chrome.tabs.create({ url: 'https://mail.google.com' });
+  } else {
+    migrateStoredBackendConnectorDefaults().catch(error => {
+      console.warn('[Backend] Connector default migration failed', error);
+    });
   }
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  migrateStoredBackendConnectorDefaults().catch(error => {
+    console.warn('[Backend] Connector default migration failed', error);
+  });
 });
 
 console.log('[EmailReadAutomate] Background service worker running.');

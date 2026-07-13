@@ -17,6 +17,12 @@ const logEmpty    = $('logEmpty');
 const gmailAlert  = $('gmailAlert');
 const providerSelect = $('providerSelect');
 const providerCheckboxGroup = $('providerCheckboxGroup');
+const backendBaseUrlInput = $('backendBaseUrlInput');
+const backendConnectorIdInput = $('backendConnectorIdInput');
+const backendTokenInput = $('backendTokenInput');
+const backendAccountInput = $('backendAccountInput');
+const btnTestBackendConnection = $('btnTestBackendConnection');
+const backendConnectionStatus = $('backendConnectionStatus');
 const readTimeSlider  = $('readTimeSlider');
 const backDelaySlider = $('backDelaySlider');
 const readTimeVal     = $('readTimeVal');
@@ -27,10 +33,13 @@ const continuousDelayMinutesInput = $('continuousDelayMinutesInput');
 const randomEmailOpeningToggle = $('randomEmailOpeningToggle');
 const retryEmailOpeningToggle = $('retryEmailOpeningToggle');
 const manualActivityPauseToggle = $('manualActivityPauseToggle');
+const gmailPromotionsToggle = $('gmailPromotionsToggle');
+const gmailPromotionsPageLimitInput = $('gmailPromotionsPageLimitInput');
 const maxEmailsInput = $('maxEmailsInput');
 const enableAccountSwitchingToggle = $('enableAccountSwitchingToggle');
 const accountSelectionRow = $('accountSelectionRow');
 const accountList = $('accountList');
+const btnSelectAllAccounts = $('btnSelectAllAccounts');
 const btnRefreshAccounts = $('btnRefreshAccounts');
 const btnDeepScanGmail = $('btnDeepScanGmail');
 const proxyManagerToggle = $('proxyManagerToggle');
@@ -65,6 +74,10 @@ const btnDeleteAutomationTemplate = $('btnDeleteAutomationTemplate');
 const DEFAULT_SETTINGS = {
   selectedProvider: 'gmail',
   selectedProviders: ['gmail'],
+  backendBaseUrl: 'http://10.5.56.133:3000/api/anslation/product-api/knproducts/kncampaignastra/knemailastra/inbox-lab',
+  backendConnectorId: 'inbox-connector-mrdbbh2d-0pnehvxo',
+  backendToken: 'inboxlab_5tsdxevkmrdbbh2ekjemcy',
+  backendAccount: 'barjrajkumar451@gmail.com',
   readTime: 4,
   backDelay: 2,
   autoRefresh: true,
@@ -73,6 +86,8 @@ const DEFAULT_SETTINGS = {
   randomEmailOpening: false,
   retryEmailOpening: true,
   manualActivityPause: true,
+  processGmailPromotions: true,
+  gmailPromotionsPageLimit: 1,
   maxEmails: 20,
   maxLinksPerEmail: 1,
   enableLinkOpening: true,
@@ -86,6 +101,12 @@ const DEFAULT_SETTINGS = {
   globalProxyId: '',
   selectedAccounts: []
 };
+
+const LEGACY_BACKEND_BASE_URLS = [
+  'http://10.5.56.133:8000/api/knproducts/kncampaignastra/knemailastra/inbox-lab'
+];
+const LEGACY_BACKEND_CONNECTOR_IDS = ['extension-system-1'];
+const LEGACY_BACKEND_TOKENS = ['inboxlab_5tsdxevkmrddbbh2ekjemcy'];
 
 const PROVIDER_OPTIONS = [
   { id: 'gmail', label: 'Gmail' },
@@ -289,6 +310,20 @@ function validateMaxLinksPerEmail(value) {
   return parsed;
 }
 
+function validateGmailPromotionsPageLimit(value) {
+  const parsed = parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return 1;
+  }
+
+  if (parsed > 10) {
+    return 10;
+  }
+
+  return parsed;
+}
+
 function validateContinuousDelayMinutes(value) {
   const parsed = parseInt(value, 10);
 
@@ -301,6 +336,25 @@ function validateContinuousDelayMinutes(value) {
   }
 
   return parsed;
+}
+
+function normalizeBackendValue(value, fallback, legacyValues = []) {
+  const normalized = String(value || '').trim();
+  return !normalized || legacyValues.includes(normalized) ? fallback : normalized;
+}
+
+function normalizeBackendConnectorSettings(settings = {}) {
+  return {
+    backendBaseUrl: normalizeBackendValue(settings.backendBaseUrl, DEFAULT_SETTINGS.backendBaseUrl, LEGACY_BACKEND_BASE_URLS),
+    backendConnectorId: normalizeBackendValue(settings.backendConnectorId, DEFAULT_SETTINGS.backendConnectorId, LEGACY_BACKEND_CONNECTOR_IDS),
+    backendToken: normalizeBackendValue(settings.backendToken, DEFAULT_SETTINGS.backendToken, LEGACY_BACKEND_TOKENS),
+    backendAccount: normalizeBackendValue(settings.backendAccount, DEFAULT_SETTINGS.backendAccount),
+  };
+}
+
+function setBackendConnectionStatus(label = 'Not tested', state = '') {
+  backendConnectionStatus.textContent = label;
+  backendConnectionStatus.className = `connector-status ${state}`.trim();
 }
 
 function getProviderLabel(provider = '') {
@@ -532,6 +586,11 @@ getProviderCheckboxes().forEach((input) => {
     saveSettings();
   });
 });
+backendBaseUrlInput.addEventListener('change', saveSettings);
+backendConnectorIdInput.addEventListener('change', saveSettings);
+backendTokenInput.addEventListener('change', saveSettings);
+backendAccountInput.addEventListener('change', saveSettings);
+btnTestBackendConnection.addEventListener('click', testBackendConnection);
 autoRefreshToggle.addEventListener('change', saveSettings);
 continuousModeToggle.addEventListener('change', async () => {
   saveSettings();
@@ -548,6 +607,11 @@ continuousDelayMinutesInput.addEventListener('input', () => {
 randomEmailOpeningToggle.addEventListener('change', saveSettings);
 retryEmailOpeningToggle.addEventListener('change', saveSettings);
 manualActivityPauseToggle.addEventListener('change', saveSettings);
+gmailPromotionsToggle.addEventListener('change', saveSettings);
+gmailPromotionsPageLimitInput.addEventListener('input', () => {
+  gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(gmailPromotionsPageLimitInput.value);
+  saveSettings();
+});
 maxEmailsInput.addEventListener('input', () => {
   maxEmailsInput.value = validateMaxEmails(maxEmailsInput.value);
   saveSettings();
@@ -595,6 +659,7 @@ reprocessingModeSelect.addEventListener('change', () => {
 
 btnSaveTemplates.addEventListener('click', saveReplyTemplates);
 btnClearProcessedHistory.addEventListener('click', clearProcessedHistory);
+btnSelectAllAccounts.addEventListener('click', selectAllRenderedAccounts);
 btnRefreshAccounts.addEventListener('click', () => refreshAccounts());
 btnDeepScanGmail.addEventListener('click', async () => {
   if (!getSelectedProviders().includes('gmail')) {
@@ -637,6 +702,8 @@ function getAutomationTemplateSettingsSnapshot() {
     'randomEmailOpening',
     'retryEmailOpening',
     'manualActivityPause',
+    'processGmailPromotions',
+    'gmailPromotionsPageLimit',
     'maxEmails',
     'maxLinksPerEmail',
     'enableLinkOpening',
@@ -719,6 +786,8 @@ function applySettingsToControls(templateSettings = {}) {
   randomEmailOpeningToggle.checked = Boolean(merged.randomEmailOpening);
   retryEmailOpeningToggle.checked = Boolean(merged.retryEmailOpening);
   manualActivityPauseToggle.checked = Boolean(merged.manualActivityPause);
+  gmailPromotionsToggle.checked = merged.processGmailPromotions !== false;
+  gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(merged.gmailPromotionsPageLimit);
   maxEmailsInput.value = validateMaxEmails(merged.maxEmails);
   maxLinksPerEmailInput.value = validateMaxLinksPerEmail(merged.maxLinksPerEmail);
   enableLinkOpeningToggle.checked = Boolean(merged.enableLinkOpening);
@@ -801,14 +870,30 @@ function deleteSelectedAutomationTemplate() {
 function getCurrentSettings() {
   const maxEmails = validateMaxEmails(maxEmailsInput.value);
   const maxLinksPerEmail = validateMaxLinksPerEmail(maxLinksPerEmailInput.value);
+  const gmailPromotionsPageLimit = validateGmailPromotionsPageLimit(gmailPromotionsPageLimitInput.value);
   const continuousDelayMinutes = validateContinuousDelayMinutes(continuousDelayMinutesInput.value);
+  const backendConnector = normalizeBackendConnectorSettings({
+    backendBaseUrl: backendBaseUrlInput.value,
+    backendConnectorId: backendConnectorIdInput.value,
+    backendToken: backendTokenInput.value,
+    backendAccount: backendAccountInput.value,
+  });
   maxEmailsInput.value = maxEmails;
   maxLinksPerEmailInput.value = maxLinksPerEmail;
+  gmailPromotionsPageLimitInput.value = gmailPromotionsPageLimit;
   continuousDelayMinutesInput.value = continuousDelayMinutes;
+  backendBaseUrlInput.value = backendConnector.backendBaseUrl;
+  backendConnectorIdInput.value = backendConnector.backendConnectorId;
+  backendTokenInput.value = backendConnector.backendToken;
+  backendAccountInput.value = backendConnector.backendAccount;
 
   return {
     selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
     selectedProviders: getSelectedProviders(),
+    backendBaseUrl: backendConnector.backendBaseUrl,
+    backendConnectorId: backendConnector.backendConnectorId,
+    backendToken: backendConnector.backendToken,
+    backendAccount: backendConnector.backendAccount,
     readTime: parseInt(readTimeSlider.value) || DEFAULT_SETTINGS.readTime,
     backDelay: parseInt(backDelaySlider.value) || DEFAULT_SETTINGS.backDelay,
     autoRefresh: autoRefreshToggle.checked,
@@ -817,6 +902,8 @@ function getCurrentSettings() {
     randomEmailOpening: randomEmailOpeningToggle.checked,
     retryEmailOpening: retryEmailOpeningToggle.checked,
     manualActivityPause: manualActivityPauseToggle.checked,
+    processGmailPromotions: gmailPromotionsToggle.checked,
+    gmailPromotionsPageLimit,
     maxEmails,
     maxLinksPerEmail,
     enableLinkOpening: enableLinkOpeningToggle.checked,
@@ -850,6 +937,11 @@ function loadSettings() {
   chrome.storage.local.get([
     'selectedProvider',
     'selectedProviders',
+    'backendBaseUrl',
+    'backendConnectorId',
+    'backendToken',
+    'backendAccount',
+    'backendConnectionStatus',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -858,6 +950,8 @@ function loadSettings() {
     'randomEmailOpening',
     'retryEmailOpening',
     'manualActivityPause',
+    'processGmailPromotions',
+    'gmailPromotionsPageLimit',
     'emailsOpened',
     'state',
     'maxEmails',
@@ -886,6 +980,37 @@ function loadSettings() {
         ? data.selectedProviders
         : [data.selectedProvider || DEFAULT_SETTINGS.selectedProvider]
     );
+    const backendConnector = normalizeBackendConnectorSettings(data);
+    const storedBackendConnector = {
+      backendBaseUrl: String(data.backendBaseUrl || '').trim(),
+      backendConnectorId: String(data.backendConnectorId || '').trim(),
+      backendToken: String(data.backendToken || '').trim(),
+      backendAccount: String(data.backendAccount || '').trim(),
+    };
+    const backendConnectorMigrated = (
+      backendConnector.backendBaseUrl !== storedBackendConnector.backendBaseUrl ||
+      backendConnector.backendConnectorId !== storedBackendConnector.backendConnectorId ||
+      backendConnector.backendToken !== storedBackendConnector.backendToken ||
+      backendConnector.backendAccount !== storedBackendConnector.backendAccount
+    );
+    backendBaseUrlInput.value = backendConnector.backendBaseUrl;
+    backendConnectorIdInput.value = backendConnector.backendConnectorId;
+    backendTokenInput.value = backendConnector.backendToken;
+    backendAccountInput.value = backendConnector.backendAccount;
+    if (backendConnectorMigrated) {
+      chrome.storage.local.set({
+        ...backendConnector,
+        backendConnectionStatus: 'Not tested',
+        backendLastError: '',
+      });
+      setBackendConnectionStatus('Not tested', '');
+    } else if (data.backendConnectionStatus === 'Online') {
+      setBackendConnectionStatus('Online', 'online');
+    } else if (data.backendConnectionStatus === 'Offline') {
+      setBackendConnectionStatus('Offline', 'offline');
+    } else {
+      setBackendConnectionStatus('Not tested', '');
+    }
 
     if (data.readTime)  {
       readTimeSlider.value = data.readTime;
@@ -905,6 +1030,10 @@ function loadSettings() {
     randomEmailOpeningToggle.checked = data.randomEmailOpening !== undefined ? data.randomEmailOpening : DEFAULT_SETTINGS.randomEmailOpening;
     retryEmailOpeningToggle.checked = data.retryEmailOpening !== undefined ? data.retryEmailOpening : DEFAULT_SETTINGS.retryEmailOpening;
     manualActivityPauseToggle.checked = data.manualActivityPause !== undefined ? data.manualActivityPause : DEFAULT_SETTINGS.manualActivityPause;
+    gmailPromotionsToggle.checked = data.processGmailPromotions !== undefined ? data.processGmailPromotions : DEFAULT_SETTINGS.processGmailPromotions;
+    gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(
+      data.gmailPromotionsPageLimit !== undefined ? data.gmailPromotionsPageLimit : DEFAULT_SETTINGS.gmailPromotionsPageLimit
+    );
     if (data.emailsOpened) {
       statOpened.textContent = data.emailsOpened;
     }
@@ -976,6 +1105,21 @@ function loadSettings() {
 function getSelectedAccounts() {
   return Array.from(accountList.querySelectorAll('input[type="checkbox"]:checked'))
     .map(input => input.value);
+}
+
+function selectAllRenderedAccounts() {
+  const checkboxes = Array.from(accountList.querySelectorAll('input[type="checkbox"]'));
+
+  if (!checkboxes.length) {
+    log('No detected accounts to select.', 'warn');
+    return;
+  }
+
+  checkboxes.forEach(input => {
+    input.checked = true;
+  });
+  saveSettings();
+  log(`Selected all ${checkboxes.length} detected account(s).`, 'success');
 }
 
 function renderAccounts(accounts, selectedAccounts = []) {
@@ -1247,6 +1391,65 @@ async function addProxyFromForm() {
   }
 
   log('Proxy saved.', 'success');
+}
+
+async function testBackendConnection() {
+  const settings = getCurrentSettings();
+
+  if (!settings.backendBaseUrl || !settings.backendConnectorId || !settings.backendToken || !settings.backendAccount) {
+    setBackendConnectionStatus('Missing values', 'offline');
+    log('Enter Backend URL, Connector ID, Token, and Account before Connect/Test.', 'warn');
+    return;
+  }
+
+  btnTestBackendConnection.disabled = true;
+  btnTestBackendConnection.textContent = 'Testing';
+  setBackendConnectionStatus('Testing...', '');
+  saveSettings();
+
+  try {
+    const result = await sendRuntimeMessage({
+      action: 'TEST_BACKEND_CONNECTOR',
+      backend: {
+        baseUrl: settings.backendBaseUrl,
+        connectorId: settings.backendConnectorId,
+        token: settings.backendToken,
+        account: settings.backendAccount,
+      },
+    });
+
+    if (result.ok) {
+      setBackendConnectionStatus('Online', 'online');
+      chrome.storage.local.set({
+        backendConnectionStatus: 'Online',
+        backendLastCheck: new Date().toISOString(),
+      });
+      log(`Backend connector online (${result.method || 'request'} ${result.status || 200})`, 'success');
+      return;
+    }
+
+    setBackendConnectionStatus('Offline', 'offline');
+    chrome.storage.local.set({
+      backendConnectionStatus: 'Offline',
+      backendLastCheck: new Date().toISOString(),
+      backendLastError: result.error || 'Connection failed',
+    });
+    log(`Backend connector failed: ${result.error || 'Connection failed'}`, 'error');
+  } catch (error) {
+    const message = error.message || 'Connection failed';
+    setBackendConnectionStatus('Offline', 'offline');
+    chrome.storage.local.set({
+      backendConnectionStatus: 'Offline',
+      backendLastCheck: new Date().toISOString(),
+      backendLastError: message,
+    });
+    log(`Backend connector failed: ${message}`, 'error');
+  } finally {
+    if (btnTestBackendConnection.isConnected) {
+      btnTestBackendConnection.disabled = false;
+      btnTestBackendConnection.textContent = 'Connect/Test';
+    }
+  }
 }
 
 function createProxyAssignmentSelect(proxy, assignedAccountId, accountProxyMap) {

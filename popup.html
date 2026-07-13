@@ -111,6 +111,43 @@
         </div>
       </div>
 
+      <div class="setting-row setting-row-stack">
+        <div class="setting-info">
+          <span class="setting-name">Backend Connector</span>
+          <span class="setting-desc">Connect this extension to Inbox Lab</span>
+        </div>
+        <div class="backend-connector-grid">
+          <input
+            type="text"
+            id="backendBaseUrlInput"
+            class="batch-select backend-base-url"
+            placeholder="Server/Base URL"
+          />
+          <input
+            type="text"
+            id="backendConnectorIdInput"
+            class="batch-select"
+            placeholder="Connector ID"
+          />
+          <input
+            type="password"
+            id="backendTokenInput"
+            class="batch-select"
+            placeholder="Token"
+          />
+          <input
+            type="email"
+            id="backendAccountInput"
+            class="batch-select backend-account"
+            placeholder="Account"
+          />
+        </div>
+        <div class="backend-connector-actions">
+          <button class="btn settings-action" id="btnTestBackendConnection">Connect/Test</button>
+          <span class="connector-status" id="backendConnectionStatus">Not tested</span>
+        </div>
+      </div>
+
       <div class="setting-row setting-row-stack automation-template-card">
         <div class="setting-info">
           <span class="setting-name">Automation Templates</span>
@@ -289,6 +326,31 @@
 
       <div class="setting-row">
         <div class="setting-info">
+          <span class="setting-name">Gmail Promotions</span>
+          <span class="setting-desc">Process Gmail Promotions during automation</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="gmailPromotionsToggle" checked />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Promotions Pages</span>
+          <span class="setting-desc">Maximum Gmail Promotions pages per account</span>
+        </div>
+        <div class="setting-control">
+          <input type="number" id="gmailPromotionsPageLimitInput" class="number-input compact-number" min="1" max="10" value="1" />
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
           <span class="setting-name">Enable Account Switching</span>
           <span class="setting-desc">Process selected logged-in accounts one at a time</span>
         </div>
@@ -311,6 +373,7 @@
           <div class="account-empty">Enable switching and open a supported inbox.</div>
         </div>
         <div class="account-actions">
+          <button class="btn settings-action" id="btnSelectAllAccounts">Select All</button>
           <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
           <button class="btn settings-action" id="btnDeepScanGmail">Deep Scan Gmail</button>
         </div>

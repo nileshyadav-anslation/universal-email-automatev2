@@ -326,8 +326,8 @@
     function getMailboxes() {
       return [
         { folder: "spam", label: "Spam" },
-        { folder: "inbox", label: "Inbox" },
         { folder: "promotions", label: "Promotions" },
+        { folder: "inbox", label: "Inbox" },
       ];
     }
 

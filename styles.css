@@ -445,6 +445,64 @@ textarea {
   white-space: nowrap;
 }
 
+.backend-connector-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+
+.backend-connector-grid .batch-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.backend-connector-grid .backend-base-url,
+.backend-connector-grid .backend-account {
+  grid-column: 1 / -1;
+}
+
+.backend-connector-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.backend-connector-actions .settings-action {
+  flex: 1 1 auto;
+}
+
+.connector-status {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.connector-status.online {
+  color: var(--green);
+}
+
+.connector-status.offline {
+  color: var(--red);
+}
+
+.number-input {
+  width: 72px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.compact-number {
+  text-align: center;
+}
+
 .account-list {
   display: flex;
   flex-direction: column;
