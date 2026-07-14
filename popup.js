@@ -24,6 +24,15 @@ const backendAccountInput = $('backendAccountInput');
 const btnTestBackendConnection = $('btnTestBackendConnection');
 const backendConnectionStatus = $('backendConnectionStatus');
 const backendWorkerStatus = $('backendWorkerStatus');
+const btnExportLogs = $('btnExportLogs');
+const btnCopyLogs = $('btnCopyLogs');
+const btnClearLogs = $('btnClearLogs');
+const btnLoadOlderLogs = $('btnLoadOlderLogs');
+const logLevelFilter = $('logLevelFilter');
+const logSearchInput = $('logSearchInput');
+const logFromDate = $('logFromDate');
+const logToDate = $('logToDate');
+const btnClearLogFilters = $('btnClearLogFilters');
 const readTimeSlider  = $('readTimeSlider');
 const backDelaySlider = $('backDelaySlider');
 const readTimeVal     = $('readTimeVal');
@@ -36,6 +45,7 @@ const retryEmailOpeningToggle = $('retryEmailOpeningToggle');
 const manualActivityPauseToggle = $('manualActivityPauseToggle');
 const gmailPromotionsToggle = $('gmailPromotionsToggle');
 const gmailPromotionsPageLimitInput = $('gmailPromotionsPageLimitInput');
+const gmailInboxPageLimitInput = $('gmailInboxPageLimitInput');
 const maxEmailsInput = $('maxEmailsInput');
 const enableAccountSwitchingToggle = $('enableAccountSwitchingToggle');
 const accountSelectionRow = $('accountSelectionRow');
@@ -89,6 +99,7 @@ const DEFAULT_SETTINGS = {
   manualActivityPause: true,
   processGmailPromotions: true,
   gmailPromotionsPageLimit: 1,
+  gmailInboxPageLimit: 3,
   maxEmails: 20,
   maxLinksPerEmail: 1,
   enableLinkOpening: true,
@@ -168,8 +179,12 @@ let accountLabelOverrides = {};
 let runtimeInterval = null;
 let runtimeSeconds  = 0;
 let currentState    = 'idle'; // idle | running | paused | stopped
-const ACTIVITY_LOG_KEY = 'activityLogEntries';
-const MAX_ACTIVITY_LOG_ENTRIES = 200;
+const LOG_PAGE_SIZE = 100;
+const MAX_RENDERED_LOG_ENTRIES = 400;
+let logCursor = null;
+let logHasMore = false;
+let activeLogFilters = { level: 'all', search: '', fromTime: undefined, toTime: undefined };
+let logSearchDebounce = null;
 
 //  Helpers 
 function formatTime(s) {
@@ -180,13 +195,26 @@ function formatTime(s) {
 
 function formatLogTime(timestamp = Date.now()) {
   const date = new Date(timestamp);
-  return `${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+  const dd = date.getDate().toString().padStart(2, '0');
+  const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+  const hm = `${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`;
+  // Always show the date so date-filtered entries are unambiguous.
+  return `${dd}/${mm} ${hm}`;
 }
 
-function renderLogEntry(msg, type = 'info', timestamp = Date.now()) {
-  logEmpty.style.display = 'none';
+function formatLogTooltip(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  return date.toLocaleString(undefined, {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+}
+
+function buildLogEntryElement(msg, type = 'info', timestamp = Date.now()) {
   const entry = document.createElement('div');
   entry.className = `log-entry ${type}`;
+  // Full timestamp + message on hover (message may be clamped in the UI).
+  entry.title = `${formatLogTooltip(timestamp)}\n${msg}`;
   const time = document.createElement('span');
   time.className = 'log-time';
   time.textContent = formatLogTime(timestamp);
@@ -194,25 +222,67 @@ function renderLogEntry(msg, type = 'info', timestamp = Date.now()) {
   message.className = 'log-msg';
   message.textContent = msg;
   entry.append(time, message);
-  logScroll.prepend(entry);
-  while (logScroll.children.length > 61) {
+  return entry;
+}
+
+function dateInputToFromTime(value) {
+  if (!value) return undefined;
+  const d = new Date(`${value}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? undefined : d.getTime();
+}
+
+function dateInputToToTime(value) {
+  if (!value) return undefined;
+  const d = new Date(`${value}T23:59:59.999`);
+  return Number.isNaN(d.getTime()) ? undefined : d.getTime();
+}
+
+function getLogFilters() {
+  return {
+    level: logLevelFilter ? logLevelFilter.value || 'all' : 'all',
+    search: logSearchInput ? logSearchInput.value.trim().toLowerCase() : '',
+    fromTime: dateInputToFromTime(logFromDate ? logFromDate.value : ''),
+    toTime: dateInputToToTime(logToDate ? logToDate.value : '')
+  };
+}
+
+function logFiltersAreActive(f = activeLogFilters) {
+  return (f.level && f.level !== 'all') || Boolean(f.search) ||
+    Number.isFinite(f.fromTime) || Number.isFinite(f.toTime);
+}
+
+function liveEntryMatchesActiveFilter(type, timestamp, msg) {
+  const f = activeLogFilters;
+  if (!logFiltersAreActive(f)) return true;
+  if (f.level && f.level !== 'all' && (type || 'info') !== f.level) return false;
+  if (Number.isFinite(f.fromTime) && timestamp < f.fromTime) return false;
+  if (Number.isFinite(f.toTime) && timestamp > f.toTime) return false;
+  if (f.search && !String(msg || '').toLowerCase().includes(f.search)) return false;
+  return true;
+}
+
+function renderLogEntry(msg, type = 'info', timestamp = Date.now()) {
+  // When a filter is active, don't let non-matching live entries pollute the view.
+  if (!liveEntryMatchesActiveFilter(type, timestamp, msg)) return;
+  logEmpty.style.display = 'none';
+  logScroll.prepend(buildLogEntryElement(msg, type, timestamp));
+  while (logScroll.children.length > MAX_RENDERED_LOG_ENTRIES) {
     logScroll.removeChild(logScroll.lastChild);
   }
 }
 
-function persistLogEntry(msg, type = 'info') {
-  chrome.storage.local.get([ACTIVITY_LOG_KEY], (data) => {
-    const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
-    entries.push({
-      message: String(msg),
-      level: type,
-      time: Date.now()
-    });
+function renderLogEntryBottom(msg, type = 'info', timestamp = Date.now()) {
+  logEmpty.style.display = 'none';
+  logScroll.append(buildLogEntryElement(msg, type, timestamp));
+}
 
-    chrome.storage.local.set({
-      [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
-    });
-  });
+function persistLogEntry(msg, type = 'info') {
+  // Single writer: the background service worker owns activity-log storage.
+  chrome.runtime.sendMessage({
+    action: 'APPEND_ACTIVITY_LOG',
+    message: String(msg),
+    level: type
+  }).catch(() => {});
 }
 
 function log(msg, type = 'info', options = {}) {
@@ -239,16 +309,181 @@ function getStorage(keys) {
   return new Promise(resolve => chrome.storage.local.get(keys, resolve));
 }
 
+function updateLoadOlderLogsButton() {
+  if (!btnLoadOlderLogs) return;
+  btnLoadOlderLogs.hidden = !logHasMore;
+}
+
 function loadActivityLogs() {
-  chrome.storage.local.get([ACTIVITY_LOG_KEY], (data) => {
-    const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
-    if (!entries.length) return;
+  activeLogFilters = getLogFilters();
+  sendRuntimeMessage({
+    action: 'GET_ACTIVITY_LOG',
+    limit: LOG_PAGE_SIZE,
+    ...activeLogFilters
+  }).then((result) => {
+    const entries = result?.ok && Array.isArray(result.entries) ? result.entries : [];
+    logCursor = result?.cursor ?? null;
+    logHasMore = Boolean(result?.hasMore);
+    updateLoadOlderLogsButton();
 
     logScroll.innerHTML = '';
-    entries.slice(-60).forEach((entry) => {
+    logScroll.append(logEmpty);
+    if (!entries.length) {
+      logEmpty.textContent = logFiltersAreActive()
+        ? 'No logs match the current filter.'
+        : 'No activity yet. Start the automation.';
+      logEmpty.style.display = '';
+      return;
+    }
+
+    entries.forEach((entry) => {
       renderLogEntry(entry.message, entry.level || 'info', entry.time || Date.now());
     });
   });
+}
+
+function applyLogFilters() {
+  logCursor = null;
+  logHasMore = false;
+  loadActivityLogs();
+}
+
+function clearLogFilters() {
+  if (logLevelFilter) logLevelFilter.value = 'all';
+  if (logSearchInput) logSearchInput.value = '';
+  if (logFromDate) logFromDate.value = '';
+  if (logToDate) logToDate.value = '';
+  applyLogFilters();
+}
+
+async function loadOlderLogs() {
+  if (!logHasMore || !Number.isFinite(logCursor)) return;
+
+  btnLoadOlderLogs.disabled = true;
+  try {
+    const result = await sendRuntimeMessage({
+      action: 'GET_ACTIVITY_LOG',
+      cursor: logCursor,
+      limit: LOG_PAGE_SIZE,
+      ...activeLogFilters
+    });
+    if (!result?.ok || !Array.isArray(result.entries)) return;
+
+    [...result.entries].reverse().forEach((entry) => {
+      renderLogEntryBottom(entry.message, entry.level || 'info', entry.time || Date.now());
+    });
+    logCursor = result.cursor ?? logCursor;
+    logHasMore = Boolean(result.hasMore);
+  } finally {
+    btnLoadOlderLogs.disabled = false;
+    updateLoadOlderLogsButton();
+  }
+}
+
+async function clearActivityLogs() {
+  btnClearLogs.disabled = true;
+  try {
+    const result = await sendRuntimeMessage({ action: 'CLEAR_ACTIVITY_LOG' });
+    if (!result?.ok) {
+      log(`Clear logs failed: ${result?.error || 'Unknown error'}`, 'error', { persist: false });
+      return;
+    }
+
+    logScroll.innerHTML = '';
+    logScroll.append(logEmpty);
+    logEmpty.textContent = 'No activity yet. Start the automation.';
+    logEmpty.style.display = '';
+    logCursor = null;
+    logHasMore = false;
+    updateLoadOlderLogsButton();
+  } finally {
+    btnClearLogs.disabled = false;
+  }
+}
+
+async function fetchFilteredLogText() {
+  const result = await sendRuntimeMessage({
+    action: 'GET_ACTIVITY_LOG',
+    limit: 1000000,
+    ...activeLogFilters
+  });
+  const entries = result?.ok && Array.isArray(result.entries) ? result.entries : [];
+  const lines = entries.map((entry) => {
+    const stamp = new Date(entry.time || 0).toLocaleString();
+    return `[${stamp}] [${String(entry.level || 'info').toUpperCase()}] ${entry.message}`;
+  });
+  return { count: entries.length, text: lines.join('\n') };
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    // Fall through to the legacy path below.
+  }
+
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function copyActivityLogs() {
+  if (!btnCopyLogs) return;
+  btnCopyLogs.disabled = true;
+  const originalText = btnCopyLogs.textContent;
+  try {
+    const { count, text } = await fetchFilteredLogText();
+    if (!count) {
+      log('No logs to copy', 'warn', { persist: false });
+      return;
+    }
+
+    const copied = await copyTextToClipboard(text);
+    if (copied) {
+      btnCopyLogs.textContent = 'Copied!';
+      log(`Copied ${count} log entries to clipboard`, 'success', { persist: false });
+      setTimeout(() => { btnCopyLogs.textContent = originalText; }, 2000);
+    } else {
+      log('Copy failed. Use Export instead.', 'error', { persist: false });
+    }
+  } finally {
+    btnCopyLogs.disabled = false;
+  }
+}
+
+async function exportActivityLogs() {
+  btnExportLogs.disabled = true;
+  try {
+    const { count, text } = await fetchFilteredLogText();
+    if (!count) {
+      log('No logs to export', 'warn', { persist: false });
+      return;
+    }
+
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `email-automate-logs-${new Date().toISOString().slice(0, 10)}.txt`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    log(`Exported ${count} log entries`, 'success', { persist: false });
+  } finally {
+    btnExportLogs.disabled = false;
+  }
 }
 
 function setStatus(state, label) {
@@ -275,6 +510,38 @@ function setStatus(state, label) {
     clearInterval(runtimeInterval);
     runtimeInterval = null;
   }
+}
+
+const PAUSE_ICON_HTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause';
+const RESUME_ICON_HTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Resume';
+
+// Restore the real automation state when the popup (re)opens, so Stop/Pause
+// stay usable while automation is still running in the background.
+function restoreAutomationState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['automationState', 'providerAutomationStates', 'automationStartedAt'], (data) => {
+      const providerStates = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
+        ? data.providerAutomationStates
+        : {};
+      const anyActive = Object.values(providerStates).some(s => s === 'running' || s === 'paused');
+
+      let state = data.automationState || 'idle';
+      if (anyActive && state !== 'paused') state = 'running';
+
+      if (state === 'running' || state === 'paused') {
+        if (Number.isFinite(data.automationStartedAt)) {
+          runtimeSeconds = Math.max(0, Math.floor((Date.now() - data.automationStartedAt) / 1000));
+          statRuntime.textContent = formatTime(runtimeSeconds);
+        }
+        setStatus(state, state === 'paused' ? 'Paused' : 'Running');
+        btnPause.innerHTML = state === 'paused' ? RESUME_ICON_HTML : PAUSE_ICON_HTML;
+      } else {
+        setStatus('idle', 'Idle');
+      }
+
+      resolve(state);
+    });
+  });
 }
 
 function updateStat(el, val) {
@@ -320,6 +587,20 @@ function validateGmailPromotionsPageLimit(value) {
 
   if (parsed > 10) {
     return 10;
+  }
+
+  return parsed;
+}
+
+function validateGmailInboxPageLimit(value) {
+  const parsed = parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return DEFAULT_SETTINGS.gmailInboxPageLimit;
+  }
+
+  if (parsed > 15) {
+    return 15;
   }
 
   return parsed;
@@ -624,6 +905,10 @@ randomEmailOpeningToggle.addEventListener('change', saveSettings);
 retryEmailOpeningToggle.addEventListener('change', saveSettings);
 manualActivityPauseToggle.addEventListener('change', saveSettings);
 gmailPromotionsToggle.addEventListener('change', saveSettings);
+gmailInboxPageLimitInput.addEventListener('input', () => {
+  gmailInboxPageLimitInput.value = validateGmailInboxPageLimit(gmailInboxPageLimitInput.value);
+  saveSettings();
+});
 gmailPromotionsPageLimitInput.addEventListener('input', () => {
   gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(gmailPromotionsPageLimitInput.value);
   saveSettings();
@@ -675,6 +960,20 @@ reprocessingModeSelect.addEventListener('change', () => {
 
 btnSaveTemplates.addEventListener('click', saveReplyTemplates);
 btnClearProcessedHistory.addEventListener('click', clearProcessedHistory);
+btnExportLogs.addEventListener('click', exportActivityLogs);
+if (btnCopyLogs) btnCopyLogs.addEventListener('click', copyActivityLogs);
+btnClearLogs.addEventListener('click', clearActivityLogs);
+btnLoadOlderLogs.addEventListener('click', loadOlderLogs);
+if (logLevelFilter) logLevelFilter.addEventListener('change', applyLogFilters);
+if (logFromDate) logFromDate.addEventListener('change', applyLogFilters);
+if (logToDate) logToDate.addEventListener('change', applyLogFilters);
+if (btnClearLogFilters) btnClearLogFilters.addEventListener('click', clearLogFilters);
+if (logSearchInput) {
+  logSearchInput.addEventListener('input', () => {
+    clearTimeout(logSearchDebounce);
+    logSearchDebounce = setTimeout(applyLogFilters, 300);
+  });
+}
 btnSelectAllAccounts.addEventListener('click', selectAllRenderedAccounts);
 btnRefreshAccounts.addEventListener('click', () => refreshAccounts());
 btnDeepScanGmail.addEventListener('click', async () => {
@@ -720,6 +1019,7 @@ function getAutomationTemplateSettingsSnapshot() {
     'manualActivityPause',
     'processGmailPromotions',
     'gmailPromotionsPageLimit',
+    'gmailInboxPageLimit',
     'maxEmails',
     'maxLinksPerEmail',
     'enableLinkOpening',
@@ -804,6 +1104,7 @@ function applySettingsToControls(templateSettings = {}) {
   manualActivityPauseToggle.checked = Boolean(merged.manualActivityPause);
   gmailPromotionsToggle.checked = merged.processGmailPromotions !== false;
   gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(merged.gmailPromotionsPageLimit);
+  gmailInboxPageLimitInput.value = validateGmailInboxPageLimit(merged.gmailInboxPageLimit);
   maxEmailsInput.value = validateMaxEmails(merged.maxEmails);
   maxLinksPerEmailInput.value = validateMaxLinksPerEmail(merged.maxLinksPerEmail);
   enableLinkOpeningToggle.checked = Boolean(merged.enableLinkOpening);
@@ -887,6 +1188,7 @@ function getCurrentSettings() {
   const maxEmails = validateMaxEmails(maxEmailsInput.value);
   const maxLinksPerEmail = validateMaxLinksPerEmail(maxLinksPerEmailInput.value);
   const gmailPromotionsPageLimit = validateGmailPromotionsPageLimit(gmailPromotionsPageLimitInput.value);
+  const gmailInboxPageLimit = validateGmailInboxPageLimit(gmailInboxPageLimitInput.value);
   const continuousDelayMinutes = validateContinuousDelayMinutes(continuousDelayMinutesInput.value);
   const backendConnector = normalizeBackendConnectorSettings({
     backendBaseUrl: backendBaseUrlInput.value,
@@ -897,6 +1199,7 @@ function getCurrentSettings() {
   maxEmailsInput.value = maxEmails;
   maxLinksPerEmailInput.value = maxLinksPerEmail;
   gmailPromotionsPageLimitInput.value = gmailPromotionsPageLimit;
+  gmailInboxPageLimitInput.value = gmailInboxPageLimit;
   continuousDelayMinutesInput.value = continuousDelayMinutes;
   backendBaseUrlInput.value = backendConnector.backendBaseUrl;
   backendConnectorIdInput.value = backendConnector.backendConnectorId;
@@ -920,6 +1223,7 @@ function getCurrentSettings() {
     manualActivityPause: manualActivityPauseToggle.checked,
     processGmailPromotions: gmailPromotionsToggle.checked,
     gmailPromotionsPageLimit,
+    gmailInboxPageLimit,
     maxEmails,
     maxLinksPerEmail,
     enableLinkOpening: enableLinkOpeningToggle.checked,
@@ -969,6 +1273,7 @@ function loadSettings() {
     'manualActivityPause',
     'processGmailPromotions',
     'gmailPromotionsPageLimit',
+    'gmailInboxPageLimit',
     'emailsOpened',
     'state',
     'maxEmails',
@@ -1051,6 +1356,9 @@ function loadSettings() {
     gmailPromotionsToggle.checked = data.processGmailPromotions !== undefined ? data.processGmailPromotions : DEFAULT_SETTINGS.processGmailPromotions;
     gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(
       data.gmailPromotionsPageLimit !== undefined ? data.gmailPromotionsPageLimit : DEFAULT_SETTINGS.gmailPromotionsPageLimit
+    );
+    gmailInboxPageLimitInput.value = validateGmailInboxPageLimit(
+      data.gmailInboxPageLimit !== undefined ? data.gmailInboxPageLimit : DEFAULT_SETTINGS.gmailInboxPageLimit
     );
     if (data.emailsOpened) {
       statOpened.textContent = data.emailsOpened;
@@ -1848,6 +2156,7 @@ btnStart.addEventListener('click', async () => {
     }
 
     gmailAlert.style.display = 'none';
+    chrome.storage.local.set({ automationStartedAt: Date.now() });
     if (response.mode === 'multi-provider') {
       const started = (response.results || []).filter(result => result.ok).map(result => getProviderLabel(result.provider));
       log(`Automation started for ${started.join(', ')}`, 'success');
@@ -1880,7 +2189,7 @@ btnStop.addEventListener('click', async () => {
   log('Automation stopped', 'error');
   btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
   await sendRuntimeMessage({ action: 'STOP_AUTOMATION_ALL', providers: getSelectedProviders() });
-  chrome.storage.local.set({ automationState: 'stopped' });
+  chrome.storage.local.set({ automationState: 'stopped', automationStartedAt: null });
   sendRuntimeMessage({ action: 'CLEAR_PROXY' }).catch(() => null);
   // Re-enable start after stopping
   setTimeout(() => {
@@ -1972,6 +2281,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadActivityLogs();
   loadSettings();
   await checkGmailAndShowAlert();
-  setStatus('idle', 'Idle');
-  log('Extension ready. Choose a provider and click Start.', 'info', { persist: false });
+  const restoredState = await restoreAutomationState();
+  if (restoredState === 'running' || restoredState === 'paused') {
+    log('Automation is still running. Use Stop to end it.', 'info', { persist: false });
+  } else {
+    log('Extension ready. Choose a provider and click Start.', 'info', { persist: false });
+  }
 });

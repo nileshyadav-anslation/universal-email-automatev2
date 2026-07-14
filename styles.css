@@ -795,8 +795,95 @@ textarea {
   margin-bottom: 0;
 }
 
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 11px;
+}
+
+.log-header .card-label {
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+.log-header-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.log-header .settings-action {
+  width: auto;
+  min-height: 24px;
+  padding: 3px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.log-load-older {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.log-load-older[hidden] {
+  display: none;
+}
+
+.log-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.log-filter-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.log-filter-level {
+  flex: 0 0 40%;
+}
+
+.log-filter-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.log-date-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.log-date-field span {
+  flex-shrink: 0;
+}
+
+.log-date-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.log-filter-row .settings-action {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
 .log-scroll {
-  max-height: 108px;
+  max-height: 220px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -850,6 +937,17 @@ textarea {
   color: var(--text-muted);
   line-height: 1.45;
   font-weight: 550;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* Break long URLs so they never overflow the card border. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  /* Clamp to 5 lines, then show an ellipsis. */
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .log-entry.success .log-msg { color: var(--green); }

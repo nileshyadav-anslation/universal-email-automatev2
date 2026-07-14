@@ -2811,12 +2811,25 @@ zoho: {
         10,
         Math.max(1, parseInt(settings.gmailPromotionsPageLimit, 10) || 1)
       );
-      const gmailPromotionsPageLimited = isGmailProvider() && mailboxLabel === "Promotions";
+      const GMAIL_INBOX_MAX_PAGES = Math.min(
+        15,
+        Math.max(1, parseInt(settings.gmailInboxPageLimit, 10) || 3)
+      );
+      // Per-mailbox Gmail page cap (0 = unlimited, e.g. Spam).
+      let gmailPageLimit = 0;
+      if (isGmailProvider()) {
+        if (mailboxLabel === "Promotions") {
+          gmailPageLimit = GMAIL_PROMOTIONS_MAX_PAGES;
+        } else if (mailboxLabel === "Inbox") {
+          gmailPageLimit = GMAIL_INBOX_MAX_PAGES;
+        }
+      }
+      const gmailPageLimited = gmailPageLimit > 0;
       let gmailPagesVisited = 1;
 
       async function goToNextGmailPageWithinLimit() {
-        if (gmailPromotionsPageLimited && gmailPagesVisited >= GMAIL_PROMOTIONS_MAX_PAGES) {
-          log(`Reached Gmail Promotions page limit (${GMAIL_PROMOTIONS_MAX_PAGES} pages). Switching to next mailbox.`, "success");
+        if (gmailPageLimited && gmailPagesVisited >= gmailPageLimit) {
+          log(`Reached Gmail ${mailboxLabel} page limit (${gmailPageLimit} pages). Switching to next mailbox.`, "success");
           return false;
         }
 

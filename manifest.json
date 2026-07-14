@@ -9,6 +9,7 @@
     "proxy",
     "scripting",
     "storage",
+    "unlimitedStorage",
     "tabs",
     "webRequest",
     "webRequestAuthProvider"

@@ -355,6 +355,16 @@
 
       <div class="setting-row">
         <div class="setting-info">
+          <span class="setting-name">Inbox Pages</span>
+          <span class="setting-desc">Maximum Gmail Inbox pages per account</span>
+        </div>
+        <div class="setting-control">
+          <input type="number" id="gmailInboxPageLimitInput" class="number-input compact-number" min="1" max="15" value="3" />
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
           <span class="setting-name">Enable Account Switching</span>
           <span class="setting-desc">Process selected logged-in accounts one at a time</span>
         </div>
@@ -566,10 +576,41 @@
 
     <!-- Activity Log -->
     <div class="card log-card">
-      <div class="card-label">Activity Log</div>
+      <div class="log-header">
+        <div class="card-label">Activity Log</div>
+        <div class="log-header-actions">
+          <button class="btn settings-action" id="btnCopyLogs">Copy</button>
+          <button class="btn settings-action" id="btnExportLogs">Export</button>
+          <button class="btn settings-action danger" id="btnClearLogs">Clear Log</button>
+        </div>
+      </div>
+      <div class="log-filters">
+        <div class="log-filter-row">
+          <select id="logLevelFilter" class="batch-select log-filter-level" aria-label="Filter by level">
+            <option value="all">All levels</option>
+            <option value="info">Info</option>
+            <option value="success">Success</option>
+            <option value="warn">Warning</option>
+            <option value="error">Error</option>
+          </select>
+          <input type="text" id="logSearchInput" class="batch-select log-filter-search" placeholder="Search logs…" />
+        </div>
+        <div class="log-filter-row">
+          <label class="log-date-field">
+            <span>From</span>
+            <input type="date" id="logFromDate" class="batch-select" aria-label="From date" />
+          </label>
+          <label class="log-date-field">
+            <span>To</span>
+            <input type="date" id="logToDate" class="batch-select" aria-label="To date" />
+          </label>
+          <button class="btn settings-action" id="btnClearLogFilters" type="button">Reset</button>
+        </div>
+      </div>
       <div class="log-scroll" id="logScroll">
         <div class="log-empty" id="logEmpty">No activity yet. Start the automation.</div>
       </div>
+      <button class="btn settings-action log-load-older" id="btnLoadOlderLogs" hidden>Load older logs</button>
     </div>
 
     <footer class="footer">

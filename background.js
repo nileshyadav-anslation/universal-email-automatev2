@@ -15,8 +15,14 @@ try {
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
 const CONTENT_SCRIPT_VERSION = '2026-07-07-yahoo-cold-start-v1';
-const ACTIVITY_LOG_KEY = 'activityLogEntries';
-const MAX_ACTIVITY_LOG_ENTRIES = 200;
+const ACTIVITY_LOG_KEY = 'activityLogEntries'; // legacy single-array key, migrated into chunks
+const ACTIVITY_LOG_META_KEY = 'activityLogMeta';
+const ACTIVITY_LOG_CHUNK_PREFIX = 'activityLogChunk:';
+const ACTIVITY_LOG_CHUNK_SIZE = 200;
+// Retention is the primary limit (unlimitedStorage permission removes the 10MB cap).
+// The chunk count is only a safety backstop far above a normal month of logs.
+const ACTIVITY_LOG_MAX_CHUNKS = 5000;
+const ACTIVITY_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CONTINUOUS_ALARM_NAME = 'emailReadAutomate.continuousLoop';
 const DEFAULT_CONTINUOUS_DELAY_MINUTES = 10;
 const MIN_CONTINUOUS_DELAY_MINUTES = 1;
@@ -27,6 +33,11 @@ const DEFAULT_BACKEND_CONNECTOR_ID = 'inbox-connector-mrdbbh2d-0pnehvxo';
 const DEFAULT_BACKEND_TOKEN = 'inboxlab_5tsdxevkmrdbbh2ekjemcy';
 const DEFAULT_BACKEND_ACCOUNT = 'barjrajkumar451@gmail.com';
 const BACKEND_WORKER_POLL_INTERVAL_MS = 5000;
+const BACKEND_WORKER_ALARM_NAME = 'emailReadAutomate.backendWorkerWatchdog';
+// chrome.alarms minimum period; wakes the service worker if Chrome killed the poll interval.
+const BACKEND_WORKER_ALARM_PERIOD_MINUTES = 0.5;
+const PENDING_INBOXLAB_RESULT_LIMIT = 20;
+const PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS = 5;
 const BACKEND_WORKER_STATUSES = {
   disconnected: 'Disconnected',
   connecting: 'Connecting',
@@ -52,6 +63,7 @@ const DEFAULT_AUTOMATION_SETTINGS = {
   manualActivityPause: true,
   processGmailPromotions: true,
   gmailPromotionsPageLimit: 1,
+  gmailInboxPageLimit: 3,
   maxEmails: 10,
   maxLinksPerEmail: 1,
   enableLinkOpening: true,
@@ -82,6 +94,7 @@ const AUTOMATION_SETTING_STORAGE_KEYS = [
   'manualActivityPause',
   'processGmailPromotions',
   'gmailPromotionsPageLimit',
+  'gmailInboxPageLimit',
   'maxEmails',
   'maxLinksPerEmail',
   'enableLinkOpening',
@@ -264,21 +277,158 @@ async function setAutomationState(automationState, values = {}) {
   await chrome.storage.local.set({ ...values, automationState });
 }
 
+let activityLogWriteChain = Promise.resolve();
+
+function getEmptyActivityLogMeta() {
+  return { seq: 0, chunks: [] };
+}
+
+async function readActivityLogMeta() {
+  const data = await getStorage([ACTIVITY_LOG_META_KEY]);
+  const meta = data[ACTIVITY_LOG_META_KEY];
+  return meta && Array.isArray(meta.chunks) ? meta : getEmptyActivityLogMeta();
+}
+
+async function appendActivityLogEntries(newEntries = []) {
+  if (!newEntries.length) return;
+
+  const meta = await readActivityLogMeta();
+  let chunk = meta.chunks[meta.chunks.length - 1];
+  let entries = [];
+
+  if (chunk && chunk.count < ACTIVITY_LOG_CHUNK_SIZE) {
+    const data = await getStorage([chunk.key]);
+    entries = Array.isArray(data[chunk.key]) ? data[chunk.key] : [];
+  } else {
+    meta.seq += 1;
+    chunk = {
+      key: `${ACTIVITY_LOG_CHUNK_PREFIX}${meta.seq}`,
+      seq: meta.seq,
+      count: 0,
+      firstTime: newEntries[0].time || Date.now(),
+      lastTime: 0
+    };
+    meta.chunks.push(chunk);
+  }
+
+  entries.push(...newEntries);
+  chunk.count = entries.length;
+  chunk.lastTime = entries[entries.length - 1].time || Date.now();
+
+  const removedKeys = [];
+  while (
+    meta.chunks.length > ACTIVITY_LOG_MAX_CHUNKS ||
+    (meta.chunks.length > 1 && meta.chunks[0].lastTime && Date.now() - meta.chunks[0].lastTime > ACTIVITY_LOG_RETENTION_MS)
+  ) {
+    removedKeys.push(meta.chunks.shift().key);
+  }
+
+  await chrome.storage.local.set({
+    [chunk.key]: entries,
+    [ACTIVITY_LOG_META_KEY]: meta
+  });
+
+  if (removedKeys.length) {
+    await chrome.storage.local.remove(removedKeys);
+  }
+}
+
+async function migrateLegacyActivityLog() {
+  const data = await getStorage([ACTIVITY_LOG_KEY]);
+  const legacy = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
+  if (!legacy.length) return;
+
+  await chrome.storage.local.remove(ACTIVITY_LOG_KEY);
+  await appendActivityLogEntries(
+    legacy
+      .map(entry => ({
+        message: String(entry?.message || ''),
+        level: entry?.level || 'info',
+        time: entry?.time || Date.now()
+      }))
+      .filter(entry => entry.message)
+  );
+}
+
+function queueActivityLogWrite(task) {
+  activityLogWriteChain = activityLogWriteChain
+    .then(task)
+    .catch(error => console.warn('[Log] Activity log write failed', error));
+  return activityLogWriteChain;
+}
+
 async function addActivityLogEntry(message, level = 'info') {
   if (!message) return;
 
-  const data = await getStorage([ACTIVITY_LOG_KEY]);
-  const entries = Array.isArray(data[ACTIVITY_LOG_KEY]) ? data[ACTIVITY_LOG_KEY] : [];
-  entries.push({
-    message: String(message),
-    level,
-    time: Date.now()
-  });
+  const entry = { message: String(message), level, time: Date.now() };
+  await queueActivityLogWrite(() => appendActivityLogEntries([entry]));
+}
 
-  await chrome.storage.local.set({
-    [ACTIVITY_LOG_KEY]: entries.slice(-MAX_ACTIVITY_LOG_ENTRIES)
+function activityLogEntryMatches(entry, filters = {}) {
+  const time = entry.time || 0;
+  if (Number.isFinite(filters.fromTime) && time < filters.fromTime) return false;
+  if (Number.isFinite(filters.toTime) && time > filters.toTime) return false;
+  if (filters.level && filters.level !== 'all' && (entry.level || 'info') !== filters.level) return false;
+  if (filters.search) {
+    if (!String(entry.message || '').toLowerCase().includes(filters.search)) return false;
+  }
+  return true;
+}
+
+function activityLogChunkInWindow(chunk, fromTime, toTime) {
+  if (Number.isFinite(fromTime) && chunk.lastTime && chunk.lastTime < fromTime) return false;
+  if (Number.isFinite(toTime) && chunk.firstTime && chunk.firstTime > toTime) return false;
+  return true;
+}
+
+async function readActivityLog({ cursor = null, limit = 100, fromTime, toTime, level, search } = {}) {
+  await activityLogWriteChain.catch(() => {});
+
+  const filters = {
+    fromTime: Number.isFinite(fromTime) ? fromTime : undefined,
+    toTime: Number.isFinite(toTime) ? toTime : undefined,
+    level: level || 'all',
+    search: search ? String(search).toLowerCase().trim() : ''
+  };
+
+  const meta = await readActivityLogMeta();
+  const maxSeq = Number.isFinite(cursor) ? cursor : Infinity;
+  const chunks = meta.chunks.filter(chunk =>
+    chunk.seq < maxSeq && activityLogChunkInWindow(chunk, filters.fromTime, filters.toTime)
+  );
+  const entries = [];
+  let nextCursor = null;
+  let index = chunks.length - 1;
+
+  while (index >= 0 && entries.length < limit) {
+    const chunk = chunks[index];
+    const data = await getStorage([chunk.key]);
+    const chunkEntries = Array.isArray(data[chunk.key]) ? data[chunk.key] : [];
+    const matching = chunkEntries.filter(entry => activityLogEntryMatches(entry, filters));
+    entries.unshift(...matching);
+    nextCursor = chunk.seq;
+    index -= 1;
+  }
+
+  return {
+    ok: true,
+    entries,
+    cursor: nextCursor,
+    hasMore: index >= 0
+  };
+}
+
+async function clearActivityLog() {
+  await queueActivityLogWrite(async () => {
+    const meta = await readActivityLogMeta();
+    const keys = meta.chunks.map(chunk => chunk.key);
+    keys.push(ACTIVITY_LOG_META_KEY, ACTIVITY_LOG_KEY);
+    await chrome.storage.local.remove(keys);
   });
 }
+
+// Migrate the legacy log array before any new entries are appended.
+queueActivityLogWrite(migrateLegacyActivityLog);
 
 async function logInboxLabEvent(message, level = 'info') {
   if (!message) return;
@@ -402,12 +552,29 @@ async function startAutomationEntryPoint(settings = {}) {
   return starter(runSettings);
 }
 
+async function ensureBackendWorkerAlarm() {
+  if (!chrome.alarms) return;
+
+  const existing = await chrome.alarms.get(BACKEND_WORKER_ALARM_NAME).catch(() => null);
+  if (!existing) {
+    await chrome.alarms.create(BACKEND_WORKER_ALARM_NAME, {
+      periodInMinutes: BACKEND_WORKER_ALARM_PERIOD_MINUTES
+    });
+  }
+}
+
+async function clearBackendWorkerAlarm() {
+  if (!chrome.alarms) return;
+  await chrome.alarms.clear(BACKEND_WORKER_ALARM_NAME);
+}
+
 async function stopBackendWorker(status = BACKEND_WORKER_STATUSES.stopped, extra = {}) {
   if (backendWorkerTimer) {
     clearInterval(backendWorkerTimer);
     backendWorkerTimer = null;
   }
   backendWorkerPollInFlight = false;
+  await clearBackendWorkerAlarm().catch(() => {});
   await setBackendWorkerStatus(status, extra);
 }
 
@@ -436,9 +603,17 @@ async function startBackendWorker() {
     }, BACKEND_WORKER_POLL_INTERVAL_MS);
   }
 
+  await ensureBackendWorkerAlarm().catch(error => {
+    console.warn('[Worker] Alarm setup failed', error);
+  });
+
   if (data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.running && data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.paused) {
     await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
   }
+
+  pollBackendWorker().catch(error => {
+    console.warn('[Worker] Immediate poll failed', error);
+  });
 }
 
 async function syncBackendWorkerLifecycle() {
@@ -475,6 +650,8 @@ async function pollBackendWorker() {
       await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
       return;
     }
+
+    await flushPendingInboxLabResults();
 
     if (isAutomationBusyFromStorage(gate) || await isAutomationSessionActive()) {
       return;
@@ -848,7 +1025,45 @@ async function claimInboxLabJob(config = {}, options = {}) {
   return job;
 }
 
-async function postInboxLabJobResult(job = {}, result = {}, config = {}) {
+function isRetryableBackendStatus(status) {
+  return status >= 500 || status === 408 || status === 429;
+}
+
+async function queuePendingInboxLabResult(job = {}, result = {}, attempts = 1) {
+  if (!job?.id) return;
+
+  if (attempts > PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS) {
+    await logInboxLabEvent(
+      `[InboxLab] Dropping result for job ${job.id} after ${PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS} failed attempts`,
+      'error'
+    );
+    return;
+  }
+
+  const data = await getStorage(['pendingInboxLabResults']);
+  const queue = Array.isArray(data.pendingInboxLabResults) ? data.pendingInboxLabResults : [];
+  const next = queue.filter(item => item?.job?.id !== job.id);
+  next.push({ job, result, attempts, queuedAt: new Date().toISOString() });
+
+  await chrome.storage.local.set({
+    pendingInboxLabResults: next.slice(-PENDING_INBOXLAB_RESULT_LIMIT)
+  });
+  await logInboxLabEvent(`[InboxLab] Result for job ${job.id} queued for retry (attempt ${attempts})`, 'warn');
+}
+
+async function flushPendingInboxLabResults() {
+  const data = await getStorage(['pendingInboxLabResults']);
+  const queue = Array.isArray(data.pendingInboxLabResults) ? data.pendingInboxLabResults : [];
+  if (!queue.length) return;
+
+  await chrome.storage.local.set({ pendingInboxLabResults: [] });
+  for (const item of queue) {
+    await postInboxLabJobResult(item.job, item.result, {}, { attempt: item.attempts }).catch(() => {});
+  }
+}
+
+async function postInboxLabJobResult(job = {}, result = {}, config = {}, options = {}) {
+  const attempt = Number.isFinite(options.attempt) ? options.attempt : 0;
   const normalizedJob = normalizeInboxLabJob(job);
   if (!normalizedJob?.id) {
     return { ok: false, error: 'Inbox Lab job id is missing' };
@@ -870,15 +1085,32 @@ async function postInboxLabJobResult(job = {}, result = {}, config = {}) {
     error: result.error || undefined,
   };
 
-  const response = await fetchBackendWithTimeout(url, {
-    method: 'POST',
-    headers: buildInboxLabHeaders(backend),
-    body: JSON.stringify(payload),
-  });
+  let response;
+  try {
+    response = await fetchBackendWithTimeout(url, {
+      method: 'POST',
+      headers: buildInboxLabHeaders(backend),
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    const message = sanitizeBackendError(error.message || error);
+    await queuePendingInboxLabResult(normalizedJob, result, attempt + 1);
+    await chrome.storage.local.set({ activeInboxLabJob: null }).catch(() => {});
+    await logInboxLabEvent(`[InboxLab] Result post failed: ${message}. Will retry.`, 'warn');
+    return { ok: false, queued: true, error: message };
+  }
   const body = await readBackendJson(response);
 
   if (!response.ok) {
     const message = sanitizeBackendError(body.detail || body.error || body.message || body.raw || `HTTP ${response.status}`);
+
+    if (isRetryableBackendStatus(response.status)) {
+      await queuePendingInboxLabResult(normalizedJob, result, attempt + 1);
+      await chrome.storage.local.set({ activeInboxLabJob: null }).catch(() => {});
+      await logInboxLabEvent(`[InboxLab] Result post failed: ${message}. Will retry.`, 'warn');
+      return { ok: false, queued: true, error: message, status: response.status };
+    }
+
     await logInboxLabEvent(`[InboxLab] Result post failed: ${message}`, 'error');
     return { ok: false, error: message, status: response.status };
   }
@@ -2521,6 +2753,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'APPEND_ACTIVITY_LOG') {
+    addActivityLogEntry(String(message.message || ''), message.level || 'info')
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'GET_ACTIVITY_LOG') {
+    readActivityLog({
+      cursor: message.cursor,
+      limit: message.limit,
+      fromTime: message.fromTime,
+      toTime: message.toTime,
+      level: message.level,
+      search: message.search
+    })
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message, entries: [], hasMore: false }));
+
+    return true;
+  }
+
+  if (message.action === 'CLEAR_ACTIVITY_LOG') {
+    clearActivityLog()
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (message.action === 'START_AUTOMATION') {
     const settings = getContinuousRunSettings(message.settings || {});
     const selectedProviders = getSelectedProvidersFromSettings(settings);
@@ -2679,10 +2942,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name !== CONTINUOUS_ALARM_NAME) return;
-    startContinuousAutomationCycle().catch(error => {
-      logContinuousEvent(`[Continuous] Alarm failed: ${error.message}`, 'error').catch(() => {});
-    });
+    if (alarm.name === CONTINUOUS_ALARM_NAME) {
+      startContinuousAutomationCycle().catch(error => {
+        logContinuousEvent(`[Continuous] Alarm failed: ${error.message}`, 'error').catch(() => {});
+      });
+      return;
+    }
+
+    if (alarm.name === BACKEND_WORKER_ALARM_NAME) {
+      // Watchdog: if Chrome killed the service worker (and with it the 5s poll
+      // interval), this alarm wakes it and syncBackendWorkerLifecycle recreates
+      // the interval and polls immediately.
+      syncBackendWorkerLifecycle().catch(error => {
+        console.warn('[Worker] Watchdog sync failed', error);
+      });
+    }
   });
 }
 
@@ -2719,6 +2993,7 @@ chrome.runtime.onInstalled.addListener(details => {
       manualActivityPause: true,
       processGmailPromotions: true,
       gmailPromotionsPageLimit: 1,
+      gmailInboxPageLimit: 3,
       maxEmails: 10,
       maxLinksPerEmail: 1,
       enableLinkOpening: true,
