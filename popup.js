@@ -23,6 +23,7 @@ const backendTokenInput = $('backendTokenInput');
 const backendAccountInput = $('backendAccountInput');
 const btnTestBackendConnection = $('btnTestBackendConnection');
 const backendConnectionStatus = $('backendConnectionStatus');
+const backendWorkerStatus = $('backendWorkerStatus');
 const readTimeSlider  = $('readTimeSlider');
 const backDelaySlider = $('backDelaySlider');
 const readTimeVal     = $('readTimeVal');
@@ -355,6 +356,21 @@ function normalizeBackendConnectorSettings(settings = {}) {
 function setBackendConnectionStatus(label = 'Not tested', state = '') {
   backendConnectionStatus.textContent = label;
   backendConnectionStatus.className = `connector-status ${state}`.trim();
+}
+
+function getBackendWorkerStatusClass(status = '') {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'idle') return 'online';
+  if (normalized === 'running') return 'running';
+  if (normalized === 'paused' || normalized === 'connecting') return 'paused';
+  if (normalized === 'stopped') return '';
+  return 'offline';
+}
+
+function setBackendWorkerStatus(label = 'Disconnected') {
+  if (!backendWorkerStatus) return;
+  backendWorkerStatus.textContent = label;
+  backendWorkerStatus.className = `connector-status ${getBackendWorkerStatusClass(label)}`.trim();
 }
 
 function getProviderLabel(provider = '') {
@@ -942,6 +958,7 @@ function loadSettings() {
     'backendToken',
     'backendAccount',
     'backendConnectionStatus',
+    'backendWorkerStatus',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -1011,6 +1028,7 @@ function loadSettings() {
     } else {
       setBackendConnectionStatus('Not tested', '');
     }
+    setBackendWorkerStatus(data.backendWorkerStatus || 'Disconnected');
 
     if (data.readTime)  {
       readTimeSlider.value = data.readTime;
@@ -1405,6 +1423,7 @@ async function testBackendConnection() {
   btnTestBackendConnection.disabled = true;
   btnTestBackendConnection.textContent = 'Testing';
   setBackendConnectionStatus('Testing...', '');
+  setBackendWorkerStatus('Connecting');
   saveSettings();
 
   try {
@@ -1420,6 +1439,7 @@ async function testBackendConnection() {
 
     if (result.ok) {
       setBackendConnectionStatus('Online', 'online');
+      setBackendWorkerStatus('Idle');
       chrome.storage.local.set({
         backendConnectionStatus: 'Online',
         backendLastCheck: new Date().toISOString(),
@@ -1429,6 +1449,7 @@ async function testBackendConnection() {
     }
 
     setBackendConnectionStatus('Offline', 'offline');
+    setBackendWorkerStatus('Disconnected');
     chrome.storage.local.set({
       backendConnectionStatus: 'Offline',
       backendLastCheck: new Date().toISOString(),
@@ -1438,6 +1459,7 @@ async function testBackendConnection() {
   } catch (error) {
     const message = error.message || 'Connection failed';
     setBackendConnectionStatus('Offline', 'offline');
+    setBackendWorkerStatus('Disconnected');
     chrome.storage.local.set({
       backendConnectionStatus: 'Offline',
       backendLastCheck: new Date().toISOString(),
@@ -1921,6 +1943,10 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === 'LOG') {
     log(prefixProviderMessage(msg.message, msg.provider), msg.level || 'info', { persist: false });
+  }
+
+  if (msg.type === 'WORKER_STATUS') {
+    setBackendWorkerStatus(msg.status || 'Disconnected');
   }
 
   if (msg.type === 'ACCOUNTS_DISCOVERED') {

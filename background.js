@@ -26,6 +26,76 @@ const DEFAULT_BACKEND_BASE_URL = 'http://10.5.56.133:3000/api/anslation/product-
 const DEFAULT_BACKEND_CONNECTOR_ID = 'inbox-connector-mrdbbh2d-0pnehvxo';
 const DEFAULT_BACKEND_TOKEN = 'inboxlab_5tsdxevkmrdbbh2ekjemcy';
 const DEFAULT_BACKEND_ACCOUNT = 'barjrajkumar451@gmail.com';
+const BACKEND_WORKER_POLL_INTERVAL_MS = 5000;
+const BACKEND_WORKER_STATUSES = {
+  disconnected: 'Disconnected',
+  connecting: 'Connecting',
+  idle: 'Idle',
+  running: 'Running',
+  paused: 'Paused',
+  stopped: 'Stopped'
+};
+const DEFAULT_AUTOMATION_SETTINGS = {
+  selectedProvider: 'gmail',
+  selectedProviders: ['gmail'],
+  backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
+  backendConnectorId: DEFAULT_BACKEND_CONNECTOR_ID,
+  backendToken: DEFAULT_BACKEND_TOKEN,
+  backendAccount: DEFAULT_BACKEND_ACCOUNT,
+  readTime: 4,
+  backDelay: 2,
+  autoRefresh: true,
+  enableContinuousMode: false,
+  continuousDelayMinutes: DEFAULT_CONTINUOUS_DELAY_MINUTES,
+  randomEmailOpening: false,
+  retryEmailOpening: true,
+  manualActivityPause: true,
+  processGmailPromotions: true,
+  gmailPromotionsPageLimit: 1,
+  maxEmails: 10,
+  maxLinksPerEmail: 1,
+  enableLinkOpening: true,
+  enableAutoReply: true,
+  enableProcessedTracking: true,
+  reprocessingMode: 'never',
+  enableAccountSwitching: false,
+  enableProxyManager: false,
+  allowProxyFallback: false,
+  proxyApplyMode: 'off',
+  globalProxyId: '',
+  selectedAccounts: []
+};
+const AUTOMATION_SETTING_STORAGE_KEYS = [
+  'selectedProvider',
+  'selectedProviders',
+  'backendBaseUrl',
+  'backendConnectorId',
+  'backendToken',
+  'backendAccount',
+  'readTime',
+  'backDelay',
+  'autoRefresh',
+  'enableContinuousMode',
+  'continuousDelayMinutes',
+  'randomEmailOpening',
+  'retryEmailOpening',
+  'manualActivityPause',
+  'processGmailPromotions',
+  'gmailPromotionsPageLimit',
+  'maxEmails',
+  'maxLinksPerEmail',
+  'enableLinkOpening',
+  'enableAutoReply',
+  'enableProcessedTracking',
+  'reprocessingMode',
+  'enableAccountSwitching',
+  'enableProxyManager',
+  'allowProxyFallback',
+  'proxyApplyMode',
+  'globalProxyId',
+  'selectedAccounts',
+  'proxySettings'
+];
 const LEGACY_BACKEND_BASE_URLS = [
   'http://10.5.56.133:8000/api/knproducts/kncampaignastra/knemailastra/inbox-lab'
 ];
@@ -55,6 +125,8 @@ const PROVIDER_LABELS = {
   proton: 'Proton',
   zoho: 'Zoho'
 };
+let backendWorkerTimer = null;
+let backendWorkerPollInFlight = false;
 
 function getProviderStartUrl(provider = 'gmail') {
   return PROVIDER_URLS[provider] || PROVIDER_URLS.gmail;
@@ -217,6 +289,285 @@ async function logInboxLabEvent(message, level = 'info') {
     level
   }).catch(() => {});
   await addActivityLogEntry(message, level).catch(() => {});
+}
+
+async function setBackendWorkerStatus(status = BACKEND_WORKER_STATUSES.disconnected, extra = {}) {
+  const safeStatus = Object.values(BACKEND_WORKER_STATUSES).includes(status)
+    ? status
+    : BACKEND_WORKER_STATUSES.disconnected;
+
+  await chrome.storage.local.set({
+    backendWorkerStatus: safeStatus,
+    backendWorkerLastUpdate: new Date().toISOString(),
+    ...extra
+  });
+  chrome.runtime.sendMessage({
+    type: 'WORKER_STATUS',
+    status: safeStatus,
+    ...extra
+  }).catch(() => {});
+}
+
+function isAutomationBusyFromStorage(data = {}) {
+  if (data.automationState === 'running' || data.automationState === 'paused') {
+    return true;
+  }
+
+  const states = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
+    ? data.providerAutomationStates
+    : {};
+  return hasActiveProviderState(states);
+}
+
+function inferProviderFromInboxLabJob(job = {}) {
+  const explicitProvider = String(job.provider || '').trim().toLowerCase();
+  if (MULTI_PROVIDER_IDS.includes(explicitProvider)) {
+    return explicitProvider;
+  }
+
+  const email = extractEmail(job.account_email || job.accountEmail || job.account || '');
+  if (/@(?:gmail|googlemail)\.com$/i.test(email)) return 'gmail';
+  if (/@(?:yahoo|ymail|rocketmail)\.com$/i.test(email)) return 'yahoo';
+  if (/@aol\.com$/i.test(email)) return 'aol';
+  if (/@(?:outlook|hotmail|live|msn)\.com$/i.test(email)) return 'outlook';
+
+  return '';
+}
+
+async function getStoredAutomationSettings() {
+  const data = await getStorage(AUTOMATION_SETTING_STORAGE_KEYS);
+  const proxySettings = data.proxySettings && typeof data.proxySettings === 'object'
+    ? data.proxySettings
+    : {};
+  const settings = {
+    ...DEFAULT_AUTOMATION_SETTINGS,
+    ...data
+  };
+
+  if (data.enableProxyManager === undefined && proxySettings.enabled !== undefined) {
+    settings.enableProxyManager = Boolean(proxySettings.enabled);
+  }
+  if (data.allowProxyFallback === undefined && proxySettings.allowFallback !== undefined) {
+    settings.allowProxyFallback = Boolean(proxySettings.allowFallback);
+  }
+  if (!data.proxyApplyMode && proxySettings.applyMode) {
+    settings.proxyApplyMode = proxySettings.applyMode;
+  }
+  if (!data.globalProxyId && proxySettings.globalProxyId) {
+    settings.globalProxyId = proxySettings.globalProxyId;
+  }
+
+  delete settings.proxySettings;
+  return settings;
+}
+
+async function getWorkerAutomationSettings(job = {}) {
+  const storedSettings = await getStoredAutomationSettings();
+  const selectedProviders = getSelectedProvidersFromSettings(storedSettings);
+  const provider = inferProviderFromInboxLabJob(job)
+    || storedSettings.selectedProvider
+    || selectedProviders[0]
+    || 'gmail';
+
+  return getContinuousRunSettings({
+    ...storedSettings,
+    selectedProvider: provider,
+    selectedProviders: [provider],
+    inboxLabJob: {
+      ...job,
+      provider
+    }
+  });
+}
+
+async function handleAutomationStartFailure(error, selectedProviders = []) {
+  if (selectedProviders.length === 1) {
+    await postActiveInboxLabJobFailure(error, selectedProviders[0]);
+  }
+  await stopContinuousMode().catch(() => {});
+  await setAutomationState('idle').catch(() => {});
+  await clearProxyForStop();
+}
+
+async function startAutomationEntryPoint(settings = {}) {
+  const runSettings = getContinuousRunSettings(settings || {});
+  const selectedProviders = getSelectedProvidersFromSettings(runSettings);
+  const starter = selectedProviders.length > 1
+    ? startMultiProviderAutomation
+    : startAutomationFromBackground;
+  const continuousSettings = { ...runSettings };
+  delete continuousSettings.inboxLabJob;
+
+  await setContinuousModeActive(continuousSettings);
+  return starter(runSettings);
+}
+
+async function stopBackendWorker(status = BACKEND_WORKER_STATUSES.stopped, extra = {}) {
+  if (backendWorkerTimer) {
+    clearInterval(backendWorkerTimer);
+    backendWorkerTimer = null;
+  }
+  backendWorkerPollInFlight = false;
+  await setBackendWorkerStatus(status, extra);
+}
+
+async function startBackendWorker() {
+  const data = await getStorage([
+    'backendConnectionStatus',
+    'backendWorkerEnabled',
+    'backendWorkerStatus'
+  ]);
+
+  if (data.backendConnectionStatus !== 'Online') {
+    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
+    return;
+  }
+
+  if (data.backendWorkerEnabled === false) {
+    await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
+    return;
+  }
+
+  if (!backendWorkerTimer) {
+    backendWorkerTimer = setInterval(() => {
+      pollBackendWorker().catch(error => {
+        console.warn('[Worker] Poll failed', error);
+      });
+    }, BACKEND_WORKER_POLL_INTERVAL_MS);
+  }
+
+  if (data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.running && data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.paused) {
+    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
+  }
+}
+
+async function syncBackendWorkerLifecycle() {
+  const data = await getStorage(['backendConnectionStatus', 'backendWorkerEnabled']);
+
+  if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
+    await startBackendWorker();
+  } else if (data.backendConnectionStatus !== 'Online') {
+    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
+  } else {
+    await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
+  }
+}
+
+async function pollBackendWorker() {
+  if (backendWorkerPollInFlight) return;
+  backendWorkerPollInFlight = true;
+
+  try {
+    const gate = await getStorage([
+      'backendConnectionStatus',
+      'backendWorkerEnabled',
+      'backendWorkerStatus',
+      'automationState',
+      'providerAutomationStates'
+    ]);
+
+    if (gate.backendConnectionStatus !== 'Online') {
+      await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
+      return;
+    }
+
+    if (gate.backendWorkerEnabled === false) {
+      await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
+      return;
+    }
+
+    if (isAutomationBusyFromStorage(gate) || await isAutomationSessionActive()) {
+      return;
+    }
+
+    const job = await claimInboxLabJob(gate, { silent: true });
+    if (!job) {
+      if (gate.backendWorkerStatus !== BACKEND_WORKER_STATUSES.idle) {
+        await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
+      }
+      return;
+    }
+
+    await handleIncomingBackendWorkerJob(job);
+  } catch (error) {
+    console.warn('[Worker] Backend poll failed', error);
+    await chrome.storage.local.set({
+      backendWorkerLastError: sanitizeBackendError(error.message || error),
+      backendWorkerLastUpdate: new Date().toISOString()
+    }).catch(() => {});
+  } finally {
+    backendWorkerPollInFlight = false;
+  }
+}
+
+async function handleIncomingBackendWorkerJob(job = {}) {
+  const settings = await getWorkerAutomationSettings(job);
+  const selectedProviders = getSelectedProvidersFromSettings(settings);
+
+  await chrome.storage.local.set({
+    backendWorkerActiveJob: job,
+    backendWorkerLastJobId: job.id || '',
+    backendWorkerLastError: ''
+  });
+  await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.running);
+
+  try {
+    await startAutomationEntryPoint(settings);
+  } catch (error) {
+    await handleAutomationStartFailure(error, selectedProviders);
+    await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
+    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle, {
+      backendWorkerLastError: sanitizeBackendError(error.message || error)
+    });
+    throw error;
+  }
+}
+
+async function maybeSetBackendWorkerIdleAfterTerminal() {
+  const data = await getStorage([
+    'backendConnectionStatus',
+    'backendWorkerEnabled',
+    'backendWorkerStatus',
+    'backendWorkerActiveJob'
+  ]);
+
+  if (data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.running && data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.paused) {
+    return;
+  }
+
+  await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
+  if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
+    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
+  } else {
+    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
+  }
+}
+
+async function updateBackendWorkerForControl(action = '') {
+  const data = await getStorage([
+    'backendConnectionStatus',
+    'backendWorkerEnabled',
+    'backendWorkerStatus',
+    'backendWorkerActiveJob'
+  ]);
+  const hasWorkerRun = Boolean(data.backendWorkerActiveJob)
+    || data.backendWorkerStatus === BACKEND_WORKER_STATUSES.running
+    || data.backendWorkerStatus === BACKEND_WORKER_STATUSES.paused;
+
+  if (!hasWorkerRun) return;
+
+  if (action === 'PAUSE') {
+    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.paused);
+  } else if (action === 'RESUME') {
+    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.running);
+  } else if (action === 'STOP') {
+    await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
+    if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
+      await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
+    } else {
+      await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
+    }
+  }
 }
 
 function normalizeBackendValue(value, fallback, legacyValues = []) {
@@ -440,7 +791,8 @@ function normalizeInboxLabJob(rawJob = {}) {
   };
 }
 
-async function claimInboxLabJob(config = {}) {
+async function claimInboxLabJob(config = {}, options = {}) {
+  const silent = Boolean(options.silent);
   const backend = await getBackendConnectorConfig(config);
 
   if (!backend.baseUrl || !backend.connectorId || !backend.token) {
@@ -452,7 +804,9 @@ async function claimInboxLabJob(config = {}) {
     `/jobs/claim?connector_id=${encodeURIComponent(backend.connectorId)}&token=${encodeURIComponent(backend.token)}`
   );
 
-  await logInboxLabEvent('[InboxLab] Claiming job', 'info');
+  if (!silent) {
+    await logInboxLabEvent('[InboxLab] Claiming job', 'info');
+  }
 
   const response = await fetchBackendWithTimeout(url, {
     method: 'GET',
@@ -461,7 +815,9 @@ async function claimInboxLabJob(config = {}) {
 
   if (response.status === 204) {
     await chrome.storage.local.set({ activeInboxLabJob: null });
-    await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    if (!silent) {
+      await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    }
     return null;
   }
 
@@ -475,7 +831,9 @@ async function claimInboxLabJob(config = {}) {
   const job = normalizeInboxLabJob(body);
   if (!job) {
     await chrome.storage.local.set({ activeInboxLabJob: null });
-    await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    if (!silent) {
+      await logInboxLabEvent('[InboxLab] No job available', 'warn');
+    }
     return null;
   }
 
@@ -554,8 +912,46 @@ async function postActiveInboxLabJobFailure(error, provider = '') {
   });
 }
 
+async function attachInboxLabJobToSettings(provider = '', settings = {}, claimedJob = {}) {
+  const job = {
+    ...claimedJob,
+    provider: claimedJob.provider || provider
+  };
+  const nextSettings = {
+    ...settings,
+    selectedProvider: provider,
+    inboxLabJob: job,
+  };
+
+  if (job.account_email) {
+    const data = await getStorage(['discoveredAccounts']);
+    const discoveredAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
+    const targetAccount = discoveredAccounts.find(account => {
+      if (!account || !String(account.id || '').startsWith(`${provider}:`)) return false;
+      return extractEmail(`${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`) === job.account_email;
+    });
+
+    if (targetAccount?.id) {
+      nextSettings.enableAccountSwitching = true;
+      nextSettings.selectedAccounts = [targetAccount.id];
+      nextSettings.currentAccountIndex = 0;
+      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account: ${job.account_email}`, 'info');
+    } else {
+      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account not found in discovered accounts: ${job.account_email}`, 'warn');
+    }
+  }
+
+  return nextSettings;
+}
+
 async function prepareInboxLabJobSettings(provider = '', settings = {}) {
   if (!MULTI_PROVIDER_IDS.includes(provider)) return settings;
+
+  if (settings.inboxLabJob?.id) {
+    const nextSettings = await attachInboxLabJobToSettings(provider, settings, settings.inboxLabJob);
+    await chrome.storage.local.set({ activeInboxLabJob: nextSettings.inboxLabJob }).catch(() => {});
+    return nextSettings;
+  }
 
   let job = null;
 
@@ -581,36 +977,8 @@ async function prepareInboxLabJobSettings(provider = '', settings = {}) {
     };
   }
 
-  job = {
-    ...job,
-    provider
-  };
-  await chrome.storage.local.set({ activeInboxLabJob: job }).catch(() => {});
-
-  const nextSettings = {
-    ...settings,
-    selectedProvider: provider,
-    inboxLabJob: job,
-  };
-
-  if (job.account_email) {
-    const data = await getStorage(['discoveredAccounts']);
-    const discoveredAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
-    const targetAccount = discoveredAccounts.find(account => {
-      if (!account || !String(account.id || '').startsWith(`${provider}:`)) return false;
-      return extractEmail(`${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`) === job.account_email;
-    });
-
-    if (targetAccount?.id) {
-      nextSettings.enableAccountSwitching = true;
-      nextSettings.selectedAccounts = [targetAccount.id];
-      nextSettings.currentAccountIndex = 0;
-      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account: ${job.account_email}`, 'info');
-    } else {
-      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account not found in discovered accounts: ${job.account_email}`, 'warn');
-    }
-  }
-
+  const nextSettings = await attachInboxLabJobToSettings(provider, settings, job);
+  await chrome.storage.local.set({ activeInboxLabJob: nextSettings.inboxLabJob }).catch(() => {});
   return nextSettings;
 }
 
@@ -818,6 +1186,9 @@ async function handleTerminalAutomationMessage(message = {}, sender = {}, termin
   const stateResult = await updateProviderAutomationState(provider, terminalState);
   await addActivityLogEntry(prefixProviderMessage(logMessage, provider), terminalState === 'error' ? 'error' : 'success');
   await maybeScheduleContinuousAfterTerminal(stateResult, terminalState);
+  if (shouldScheduleContinuousFromUpdate(stateResult)) {
+    await maybeSetBackendWorkerIdleAfterTerminal();
+  }
 
   return {
     ok: true,
@@ -1725,6 +2096,7 @@ async function controlProviderAutomations(action, providers = []) {
       providerAutomationStates
     });
   }
+  await updateBackendWorkerForControl(action);
 
   return {
     ok: true,
@@ -2152,20 +2524,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_AUTOMATION') {
     const settings = getContinuousRunSettings(message.settings || {});
     const selectedProviders = getSelectedProvidersFromSettings(settings);
-    const starter = selectedProviders.length > 1
-      ? startMultiProviderAutomation
-      : startAutomationFromBackground;
 
-    setContinuousModeActive(settings)
-      .then(() => starter(settings))
+    startAutomationEntryPoint(settings)
       .then(sendResponse)
       .catch(async error => {
-        if (selectedProviders.length === 1) {
-          await postActiveInboxLabJobFailure(error, selectedProviders[0]);
-        }
-        await stopContinuousMode().catch(() => {});
-        await setAutomationState('idle').catch(() => {});
-        await clearProxyForStop();
+        await handleAutomationStartFailure(error, selectedProviders);
         sendResponse({ ok: false, error: error.message });
       });
 
@@ -2212,9 +2575,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'TEST_BACKEND_CONNECTOR') {
+    setBackendWorkerStatus(BACKEND_WORKER_STATUSES.connecting).catch(() => {});
     testBackendConnector(message.backend || {})
+      .then(async result => {
+        if (result.ok) {
+          await chrome.storage.local.set({ backendWorkerEnabled: true });
+          await startBackendWorker();
+        } else {
+          await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected, {
+            backendWorkerLastError: result.error || 'Connection failed'
+          });
+        }
+        return result;
+      })
       .then(sendResponse)
-      .catch(error => sendResponse({ ok: false, error: error.message }));
+      .catch(async error => {
+        await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected, {
+          backendWorkerLastError: sanitizeBackendError(error.message || error)
+        }).catch(() => {});
+        sendResponse({ ok: false, error: error.message });
+      });
 
     return true;
   }
@@ -2306,6 +2686,15 @@ if (chrome.alarms) {
   });
 }
 
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+  if (!changes.backendConnectionStatus && !changes.backendWorkerEnabled) return;
+
+  syncBackendWorkerLifecycle().catch(error => {
+    console.warn('[Worker] Lifecycle sync failed', error);
+  });
+});
+
 // Handle extension install
 chrome.runtime.onInstalled.addListener(details => {
   if (details.reason === 'install') {
@@ -2319,6 +2708,8 @@ chrome.runtime.onInstalled.addListener(details => {
       backendToken: DEFAULT_BACKEND_TOKEN,
       backendAccount: DEFAULT_BACKEND_ACCOUNT,
       backendConnectionStatus: 'Not tested',
+      backendWorkerEnabled: true,
+      backendWorkerStatus: BACKEND_WORKER_STATUSES.disconnected,
       backDelay: 2,
       autoRefresh: true,
       enableContinuousMode: false,
@@ -2367,6 +2758,9 @@ chrome.runtime.onInstalled.addListener(details => {
     migrateStoredBackendConnectorDefaults().catch(error => {
       console.warn('[Backend] Connector default migration failed', error);
     });
+    syncBackendWorkerLifecycle().catch(error => {
+      console.warn('[Worker] Lifecycle sync failed', error);
+    });
   }
 });
 
@@ -2374,6 +2768,13 @@ chrome.runtime.onStartup.addListener(() => {
   migrateStoredBackendConnectorDefaults().catch(error => {
     console.warn('[Backend] Connector default migration failed', error);
   });
+  syncBackendWorkerLifecycle().catch(error => {
+    console.warn('[Worker] Lifecycle sync failed', error);
+  });
+});
+
+syncBackendWorkerLifecycle().catch(error => {
+  console.warn('[Worker] Initial lifecycle sync failed', error);
 });
 
 console.log('[EmailReadAutomate] Background service worker running.');
