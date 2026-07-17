@@ -1,4 +1,4 @@
-# Email Read Automate — User Guide
+# Email Read Automate — User Guide by Nilesh
 
 A Chrome extension that automatically opens and reads your unread emails, and can optionally
 reply, click safe links, handle spam, switch between accounts, and run through a proxy. It works
