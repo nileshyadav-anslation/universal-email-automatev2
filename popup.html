@@ -574,6 +574,362 @@
       </div>
     </div>
 
+    <!-- WarmTalk -->
+    <div class="card settings-card">
+      <div class="card-label">WarmTalk</div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-name">Enable WarmTalk</span>
+          <span class="setting-desc">Enrolled accounts email each other like real users</span>
+        </div>
+        <div class="setting-control">
+          <label class="toggle">
+            <input type="checkbox" id="warmTalkEnabledToggle" />
+            <span class="toggle-track">
+              <span class="toggle-thumb"></span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div id="warmTalkBody" style="display:none;">
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Status</span>
+            <span class="setting-desc">Live WarmTalk state</span>
+          </div>
+          <div class="setting-control">
+            <span class="connector-status" id="warmTalkStatus">Stopped</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Dry Run (no real emails)</span>
+            <span class="setting-desc">Compose and discard. Turn OFF to actually send.</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkDryRunToggle" checked />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Providers</span>
+            <span class="setting-desc">Only these providers take part</span>
+          </div>
+          <div class="provider-checkbox-group" id="warmTalkProviderGroup">
+            <label class="provider-option">
+              <input type="checkbox" value="gmail" checked /> <span>Gmail</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" value="yahoo" /> <span>Yahoo</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" value="aol" /> <span>AOL</span>
+            </label>
+            <label class="provider-option">
+              <input type="checkbox" value="outlook" /> <span>Outlook</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Allow Cross-Provider</span>
+            <span class="setting-desc">Let Gmail talk to Yahoo/AOL/Outlook</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkCrossProviderToggle" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Enrolled Accounts</span>
+            <span class="setting-desc">Need at least 2. Only these can send or receive.</span>
+          </div>
+          <div class="account-list" id="warmTalkAccountList">
+            <div class="account-empty">Run Deep Scan in Settings to detect accounts.</div>
+          </div>
+          <div class="account-actions">
+            <button class="btn settings-action" id="btnWarmTalkSelectAll">Select All</button>
+            <button class="btn settings-action" id="btnWarmTalkRefreshAccounts">Refresh Accounts</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Pairing Strategy</span>
+            <span class="setting-desc">How sender/receiver are chosen</span>
+          </div>
+          <div class="setting-control">
+            <select id="warmTalkPairingSelect" class="batch-select">
+              <option value="roundRobin">Round Robin</option>
+              <option value="random">Random</option>
+              <option value="mesh">Mesh (all-to-all)</option>
+              <option value="manual">Manual Pairs</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack" id="warmTalkManualPairsRow" style="display:none;">
+          <div class="setting-info">
+            <span class="setting-name">Manual Pairs</span>
+            <span class="setting-desc">Define exactly who emails whom</span>
+          </div>
+          <div class="setting-control">
+            <select id="warmTalkPairFromSelect" class="batch-select"></select>
+            <select id="warmTalkPairToSelect" class="batch-select"></select>
+            <button class="btn settings-action" id="btnWarmTalkAddPair">Add Pair</button>
+          </div>
+          <div class="account-list" id="warmTalkPairList">
+            <div class="account-empty">No manual pairs yet.</div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Threaded Conversation</span>
+            <span class="setting-desc">Keep replying back and forth (A→B→A→B)</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkThreadToggle" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row" id="warmTalkThreadTurnsRow" style="display:none;">
+          <div class="setting-info">
+            <span class="setting-name">Thread Turns</span>
+            <span class="setting-desc">How many replies to volley per conversation</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkThreadTurnsInput" class="number-input compact-number" min="1" max="10" value="2" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Gap Between Conversations</span>
+            <span class="setting-desc">Random minutes between each conversation</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkMinCycleInput" class="number-input compact-number" min="1" max="240" value="5" />
+            <input type="number" id="warmTalkMaxCycleInput" class="number-input compact-number" min="1" max="240" value="15" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Reply Delay (seconds)</span>
+            <span class="setting-desc">Random wait before receiver opens the mail</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkReplyMinInput" class="number-input compact-number" min="5" max="3600" value="45" />
+            <input type="number" id="warmTalkReplyMaxInput" class="number-input compact-number" min="5" max="3600" value="180" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Daily Cap Per Account</span>
+            <span class="setting-desc">Max sends per account per day (0 = no cap)</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkDailyCapInput" class="number-input compact-number" min="0" max="200" value="10" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Weekly Cap Per Account</span>
+            <span class="setting-desc">Max sends per account per week (0 = no cap)</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkWeeklyCapInput" class="number-input compact-number" min="0" max="1000" value="40" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Ramp-Up</span>
+            <span class="setting-desc">Start low and build up to the daily cap (for cold accounts)</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkRampUpToggle" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row" id="warmTalkRampUpRow" style="display:none;">
+          <div class="setting-info">
+            <span class="setting-name">Ramp-Up Curve</span>
+            <span class="setting-desc">Start/day, then days to reach the daily cap</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkRampUpStartInput" class="number-input compact-number" min="1" max="100" value="2" />
+            <input type="number" id="warmTalkRampUpDaysInput" class="number-input compact-number" min="1" max="60" value="7" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Read Time (seconds)</span>
+            <span class="setting-desc">Random pause between opening and replying</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkReadMinInput" class="number-input compact-number" min="0" max="600" value="5" />
+            <input type="number" id="warmTalkReadMaxInput" class="number-input compact-number" min="0" max="600" value="20" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Click Links In Warmup Mail</span>
+            <span class="setting-desc">Simulate engagement if your templates contain links</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkLinkOpeningToggle" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row" id="warmTalkMaxLinksRow" style="display:none;">
+          <div class="setting-info">
+            <span class="setting-name">Max Links Per Email</span>
+            <span class="setting-desc">How many safe links to open</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkMaxLinksInput" class="number-input compact-number" min="1" max="10" value="1" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Mark Not Spam</span>
+            <span class="setting-desc">Rescue warmup mail that lands in Spam</span>
+          </div>
+          <div class="setting-control">
+            <label class="toggle">
+              <input type="checkbox" id="warmTalkMarkNotSpamToggle" checked />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Reply Probability (%)</span>
+            <span class="setting-desc">Real users don't reply to everything</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkReplyProbabilityInput" class="number-input compact-number" min="0" max="100" value="70" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Active Hours</span>
+            <span class="setting-desc">Only run between these hours (0-23)</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="warmTalkHoursStartInput" class="number-input compact-number" min="0" max="23" value="9" />
+            <input type="number" id="warmTalkHoursEndInput" class="number-input compact-number" min="0" max="23" value="18" />
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Active Days</span>
+            <span class="setting-desc">Days WarmTalk is allowed to run</span>
+          </div>
+          <div class="provider-checkbox-group" id="warmTalkDayGroup">
+            <label class="provider-option"><input type="checkbox" value="1" checked /> <span>Mon</span></label>
+            <label class="provider-option"><input type="checkbox" value="2" checked /> <span>Tue</span></label>
+            <label class="provider-option"><input type="checkbox" value="3" checked /> <span>Wed</span></label>
+            <label class="provider-option"><input type="checkbox" value="4" checked /> <span>Thu</span></label>
+            <label class="provider-option"><input type="checkbox" value="5" checked /> <span>Fri</span></label>
+            <label class="provider-option"><input type="checkbox" value="6" /> <span>Sat</span></label>
+            <label class="provider-option"><input type="checkbox" value="0" /> <span>Sun</span></label>
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Subject Templates</span>
+            <span class="setting-desc">One per line. A unique tracking tag is added automatically.</span>
+          </div>
+          <textarea id="warmTalkSubjectsInput" class="template-textarea" rows="4"></textarea>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Body Templates</span>
+            <span class="setting-desc">One per line. Use \n for line breaks. Empty uses defaults.</span>
+          </div>
+          <textarea id="warmTalkBodiesInput" class="template-textarea" rows="4"></textarea>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Save Settings</span>
+            <span class="setting-desc">Apply WarmTalk configuration</span>
+          </div>
+          <div class="setting-control">
+            <button class="btn settings-action" id="btnSaveWarmTalkSettings">Save WarmTalk</button>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Controls</span>
+            <span class="setting-desc">Start, pause, or stop WarmTalk</span>
+          </div>
+          <div class="account-actions">
+            <button class="btn settings-action" id="btnStartWarmTalk">Start</button>
+            <button class="btn settings-action" id="btnPauseWarmTalk">Pause</button>
+            <button class="btn settings-action danger" id="btnStopWarmTalk">Stop</button>
+          </div>
+        </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <span class="setting-name">Stats</span>
+            <span class="setting-desc">Per-account WarmTalk activity</span>
+          </div>
+          <div class="account-list" id="warmTalkStatsList">
+            <div class="account-empty">No WarmTalk activity yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Activity Log -->
     <div class="card log-card">
       <div class="log-header">

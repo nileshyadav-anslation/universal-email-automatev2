@@ -14,7 +14,7 @@ try {
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-07-07-yahoo-cold-start-v1';
+const CONTENT_SCRIPT_VERSION = '2026-07-17-warmtalk-v1';
 const ACTIVITY_LOG_KEY = 'activityLogEntries'; // legacy single-array key, migrated into chunks
 const ACTIVITY_LOG_META_KEY = 'activityLogMeta';
 const ACTIVITY_LOG_CHUNK_PREFIX = 'activityLogChunk:';
@@ -1410,6 +1410,13 @@ async function maybeScheduleContinuousAfterTerminal(stateResult, terminalState =
 }
 
 async function handleTerminalAutomationMessage(message = {}, sender = {}, terminalState = 'done') {
+  // WarmTalk drives its own lifecycle in handleWarmTalkStepResult. Letting a
+  // WarmTalk run fall through here would log "All unread emails processed" and,
+  // worse, kick off a continuous-mode cycle the user never asked for.
+  if (message.warmTalkJobId) {
+    return { ok: true, received: true, warmTalk: true };
+  }
+
   const provider = message.provider || getProviderFromUrl(sender.tab?.url || '');
   const logMessage = terminalState === 'error'
     ? `Error: ${message.message || 'Automation failed'}`
@@ -2458,6 +2465,7 @@ async function injectAutomationScripts(tabId) {
     files: [
       'linkProcessor.js',
       'replyEngine.js',
+      'composeEngine.js',
       'processedEmailManager.js',
       'providers/gmailProvider.js',
       'providers/yahooProvider.js',
@@ -2725,6 +2733,1008 @@ async function switchMailAccount(tabId, account, settings) {
   return { ok: true };
 }
 
+// ── WarmTalk ─────────────────────────────────────────────────────────────────
+// Account-to-account warmup conversations, scheduled locally.
+//
+// Each conversation is broken into individually persisted steps (send, then
+// receive) held in warmTalkQueue. A step is atomic: the service worker can die
+// at any point and the alarm below resumes from the queue rather than restarting
+// the conversation. Job payloads deliberately mirror normalizeInboxLabJob so a
+// future WarmTalk backend can replace this scheduler without touching the
+// content-script executor.
+const WARM_TALK_ALARM_NAME = 'emailReadAutomate.warmTalkLoop';
+const WARM_TALK_ALARM_PERIOD_MINUTES = 0.5;
+const WARM_TALK_TICK_INTERVAL_MS = 15000;
+const WARM_TALK_QUEUE_LIMIT = 50;
+// A step that never reports back (tab closed, crash, provider UI change) would
+// otherwise pin automationState to 'running' forever and starve both WarmTalk
+// and the Inbox Lab worker. Reclaim it after this long.
+const WARM_TALK_STEP_TIMEOUT_MS = 6 * 60 * 1000;
+const WARM_TALK_STATUSES = {
+  idle: 'Idle',
+  running: 'Running',
+  paused: 'Paused',
+  stopped: 'Stopped'
+};
+// Subjects and bodies are picked independently, so every body must read
+// sensibly under every subject. Keep them short, generic, and business-like.
+const DEFAULT_WARM_TALK_SUBJECTS = [
+  'Quick question about the schedule',
+  'Following up on our last chat',
+  'Update from my side',
+  'Checking in this week',
+  'Notes from today',
+  'Draft ready for your input',
+  'Timeline for next week',
+  'Small update on the handover',
+  'Can you confirm this?',
+  'Summary of what we discussed'
+];
+const DEFAULT_WARM_TALK_BODIES = [
+  'Hi,\n\nJust checking in on this. Let me know when you get a moment.\n\nThanks',
+  'Hello,\n\nSharing a quick update from my side. Happy to discuss if useful.\n\nBest',
+  'Hi,\n\nHope your week is going well. Wanted to keep you in the loop on this one.\n\nRegards',
+  'Hey,\n\nQuick note, nothing urgent. Let me know your thoughts when free.\n\nThanks',
+  'Hello,\n\nPassing this along for your reference. No action needed right now.\n\nBest regards',
+  'Hi,\n\nI have put together a first draft. Would appreciate your view before I take it further.\n\nThanks',
+  'Hello,\n\nCould you confirm this still works on your end? Want to make sure nothing changed.\n\nBest',
+  'Hi,\n\nSummarising this so we both have it in writing. Shout if I missed anything.\n\nRegards',
+  'Hey,\n\nNo rush on this one, but wanted to get it on your radar for next week.\n\nThanks',
+  'Hello,\n\nAll looks fine from here. Let me know if you would like me to pick anything else up.\n\nBest regards'
+];
+const WARM_TALK_PAIRING_STRATEGIES = ['roundRobin', 'random', 'mesh', 'manual'];
+const DEFAULT_WARM_TALK_SETTINGS = {
+  warmTalkEnabled: false,
+  // Dry run defaults ON: a fresh install must never send real mail until the
+  // user explicitly turns it off.
+  warmTalkDryRun: true,
+  warmTalkProviders: ['gmail'],
+  warmTalkAccounts: [],
+  warmTalkPairingStrategy: 'roundRobin',
+  // [{ from: accountId, to: accountId }] — only used by the 'manual' strategy.
+  warmTalkManualPairs: [],
+  warmTalkAllowCrossProvider: false,
+  warmTalkMinCycleMinutes: 5,
+  warmTalkMaxCycleMinutes: 15,
+  warmTalkReplyDelayMinSeconds: 45,
+  warmTalkReplyDelayMaxSeconds: 180,
+  // Back-and-forth conversation: after the first reply, keep volleying.
+  warmTalkThreadEnabled: false,
+  warmTalkThreadTurns: 2,
+  warmTalkDailyCapPerAccount: 10,
+  warmTalkWeeklyCapPerAccount: 40,
+  // Ramp-up overrides the daily cap while warming a cold account.
+  warmTalkRampUpEnabled: false,
+  warmTalkRampUpStartPerDay: 2,
+  warmTalkRampUpDays: 7,
+  warmTalkRampUpStartedAt: 0,
+  warmTalkActiveHoursStart: 9,
+  warmTalkActiveHoursEnd: 18,
+  warmTalkActiveDays: [1, 2, 3, 4, 5],
+  warmTalkReplyProbability: 70,
+  warmTalkReadTimeMinSeconds: 5,
+  warmTalkReadTimeMaxSeconds: 20,
+  warmTalkEnableLinkOpening: false,
+  warmTalkMaxLinksPerEmail: 1,
+  warmTalkMarkNotSpam: true,
+  warmTalkSubjectTemplates: DEFAULT_WARM_TALK_SUBJECTS,
+  warmTalkBodyTemplates: DEFAULT_WARM_TALK_BODIES
+};
+const WARM_TALK_SETTING_STORAGE_KEYS = Object.keys(DEFAULT_WARM_TALK_SETTINGS);
+
+let warmTalkTimer = null;
+let warmTalkTickInFlight = false;
+
+async function logWarmTalkEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+async function getWarmTalkSettings(overrides = {}) {
+  const stored = await getStorage(WARM_TALK_SETTING_STORAGE_KEYS);
+  const settings = { ...DEFAULT_WARM_TALK_SETTINGS, ...stored, ...overrides };
+
+  settings.warmTalkProviders = normalizeProviders(settings.warmTalkProviders);
+  if (!settings.warmTalkProviders.length) {
+    settings.warmTalkProviders = ['gmail'];
+  }
+  settings.warmTalkAccounts = Array.isArray(settings.warmTalkAccounts) ? settings.warmTalkAccounts : [];
+  settings.warmTalkManualPairs = Array.isArray(settings.warmTalkManualPairs)
+    ? settings.warmTalkManualPairs.filter(pair => pair && pair.from && pair.to && pair.from !== pair.to)
+    : [];
+
+  if (!WARM_TALK_PAIRING_STRATEGIES.includes(settings.warmTalkPairingStrategy)) {
+    settings.warmTalkPairingStrategy = 'roundRobin';
+  }
+  settings.warmTalkActiveDays = Array.isArray(settings.warmTalkActiveDays) && settings.warmTalkActiveDays.length
+    ? settings.warmTalkActiveDays.map(Number)
+    : DEFAULT_WARM_TALK_SETTINGS.warmTalkActiveDays;
+
+  const subjects = Array.isArray(settings.warmTalkSubjectTemplates)
+    ? settings.warmTalkSubjectTemplates.map(item => String(item).trim()).filter(Boolean)
+    : [];
+  const bodies = Array.isArray(settings.warmTalkBodyTemplates)
+    ? settings.warmTalkBodyTemplates.map(item => String(item).trim()).filter(Boolean)
+    : [];
+
+  settings.warmTalkSubjectTemplates = subjects.length ? subjects : DEFAULT_WARM_TALK_SUBJECTS;
+  settings.warmTalkBodyTemplates = bodies.length ? bodies : DEFAULT_WARM_TALK_BODIES;
+
+  return settings;
+}
+
+async function setWarmTalkStatus(status, extra = {}) {
+  await chrome.storage.local.set({
+    warmTalkStatus: status,
+    warmTalkLastUpdate: new Date().toISOString(),
+    ...extra
+  }).catch(() => {});
+}
+
+function getWarmTalkAccountEmail(account = {}) {
+  return extractEmail(`${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`);
+}
+
+async function getWarmTalkEnrolledAccounts(settings = {}) {
+  const data = await getStorage(['discoveredAccounts']);
+  const discovered = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
+  const providers = new Set(normalizeProviders(settings.warmTalkProviders));
+  const enrolled = new Set(settings.warmTalkAccounts || []);
+
+  return discovered
+    .filter(account => account?.id && enrolled.has(account.id))
+    .map(account => ({
+      id: account.id,
+      label: account.label || account.id,
+      provider: getAccountProviderId(account),
+      email: getWarmTalkAccountEmail(account)
+    }))
+    .filter(account => account.email && providers.has(account.provider));
+}
+
+function isWithinWarmTalkWindow(settings = {}, now = new Date()) {
+  const days = settings.warmTalkActiveDays || [];
+  if (days.length && !days.includes(now.getDay())) {
+    return { ok: false, reason: 'outside active days' };
+  }
+
+  const start = Number(settings.warmTalkActiveHoursStart);
+  const end = Number(settings.warmTalkActiveHoursEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) {
+    return { ok: true };
+  }
+
+  const hour = now.getHours();
+  // An end hour before the start hour means the window wraps past midnight.
+  const inside = start < end ? hour >= start && hour < end : hour >= start || hour < end;
+
+  return inside ? { ok: true } : { ok: false, reason: 'outside active hours' };
+}
+
+function getTodayKey(now = new Date()) {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function getWeekKey(now = new Date()) {
+  // ISO-ish week key. Exact ISO numbering is unnecessary here; it only has to be
+  // stable and roll over once a week.
+  const start = new Date(now.getFullYear(), 0, 1);
+  const days = Math.floor((now - start) / 86400000);
+  const week = Math.ceil((days + start.getDay() + 1) / 7);
+  return `${now.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * Daily send allowance per account. With ramp-up on, this climbs from
+ * warmTalkRampUpStartPerDay to warmTalkDailyCapPerAccount over
+ * warmTalkRampUpDays — the standard way to warm a cold mailbox without
+ * tripping spam heuristics.
+ */
+function getEffectiveDailyCap(settings = {}, now = Date.now()) {
+  const target = Number(settings.warmTalkDailyCapPerAccount) || 0;
+  if (!settings.warmTalkRampUpEnabled) return target;
+  if (target <= 0) return target;
+
+  const start = Math.max(1, Number(settings.warmTalkRampUpStartPerDay) || 1);
+  const days = Math.max(1, Number(settings.warmTalkRampUpDays) || 1);
+  const startedAt = Number(settings.warmTalkRampUpStartedAt) || 0;
+
+  if (!startedAt) return Math.min(start, target);
+  if (days <= 1) return target;
+
+  const dayIndex = Math.floor((now - startedAt) / 86400000);
+  if (dayIndex >= days - 1) return target;
+
+  const progress = Math.max(0, dayIndex) / (days - 1);
+  return Math.max(1, Math.min(target, Math.round(start + (target - start) * progress)));
+}
+
+async function getWarmTalkWeeklyCounts() {
+  const data = await getStorage(['warmTalkWeeklyCounts']);
+  const week = getWeekKey();
+  const stored = data.warmTalkWeeklyCounts && typeof data.warmTalkWeeklyCounts === 'object'
+    ? data.warmTalkWeeklyCounts
+    : {};
+
+  if (stored.week !== week) {
+    return { week, counts: {} };
+  }
+
+  return { week, counts: stored.counts && typeof stored.counts === 'object' ? stored.counts : {} };
+}
+
+async function bumpWarmTalkWeeklyCount(accountId) {
+  if (!accountId) return;
+  const weekly = await getWarmTalkWeeklyCounts();
+  weekly.counts[accountId] = (weekly.counts[accountId] || 0) + 1;
+  await chrome.storage.local.set({ warmTalkWeeklyCounts: weekly }).catch(() => {});
+}
+
+async function getWarmTalkDailyCounts() {
+  const data = await getStorage(['warmTalkDailyCounts']);
+  const today = getTodayKey();
+  const stored = data.warmTalkDailyCounts && typeof data.warmTalkDailyCounts === 'object'
+    ? data.warmTalkDailyCounts
+    : {};
+
+  if (stored.date !== today) {
+    return { date: today, counts: {} };
+  }
+
+  return { date: today, counts: stored.counts && typeof stored.counts === 'object' ? stored.counts : {} };
+}
+
+async function bumpWarmTalkDailyCount(accountId) {
+  if (!accountId) return;
+  const daily = await getWarmTalkDailyCounts();
+  daily.counts[accountId] = (daily.counts[accountId] || 0) + 1;
+  await chrome.storage.local.set({ warmTalkDailyCounts: daily }).catch(() => {});
+}
+
+async function recordWarmTalkStat(accountId, field) {
+  if (!accountId || !field) return;
+  const data = await getStorage(['warmTalkStats']);
+  const stats = data.warmTalkStats && typeof data.warmTalkStats === 'object' ? { ...data.warmTalkStats } : {};
+  const entry = { sent: 0, received: 0, replied: 0, spamRescued: 0, failed: 0, ...(stats[accountId] || {}) };
+
+  entry[field] = (entry[field] || 0) + 1;
+  stats[accountId] = entry;
+  await chrome.storage.local.set({ warmTalkStats: stats }).catch(() => {});
+}
+
+function generateWarmTalkToken() {
+  return `WT-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`.toUpperCase();
+}
+
+function pickRandomItem(items = []) {
+  if (!items.length) return '';
+  return items[randomInt(0, items.length - 1)];
+}
+
+/**
+ * Picks an item at random but never the same index twice in a row, so warmup
+ * mail doesn't visibly repeat itself. Returns { value, index }.
+ */
+function pickTemplateAvoidingRepeat(items = [], lastIndex = -1) {
+  if (!items.length) return { value: '', index: -1 };
+  if (items.length === 1) return { value: items[0], index: 0 };
+
+  let index = randomInt(0, items.length - 1);
+  if (index === lastIndex) {
+    index = (index + 1 + randomInt(0, items.length - 2)) % items.length;
+  }
+
+  return { value: items[index], index };
+}
+
+function pickWarmTalkPair(settings, accounts, state = {}) {
+  if (accounts.length < 2) return null;
+
+  const byId = new Map(accounts.map(account => [account.id, account]));
+  const eligibleReceivers = (sender) => accounts.filter(account => {
+    if (account.id === sender.id) return false;
+    if (!settings.warmTalkAllowCrossProvider && account.provider !== sender.provider) return false;
+    return true;
+  });
+
+  const strategy = settings.warmTalkPairingStrategy;
+
+  if (strategy === 'manual') {
+    // Walk the user's fixed pairs in order, skipping any whose accounts are not
+    // currently enrolled/available (e.g. capped out for today).
+    const pairs = settings.warmTalkManualPairs || [];
+    const startIndex = Number(state.manualIndex) || 0;
+
+    for (let offset = 0; offset < pairs.length; offset++) {
+      const index = (startIndex + offset) % pairs.length;
+      const pair = pairs[index];
+      const sender = byId.get(pair.from);
+      const receiver = byId.get(pair.to);
+      if (!sender || !receiver) continue;
+      if (!settings.warmTalkAllowCrossProvider && sender.provider !== receiver.provider) continue;
+
+      return { sender, receiver, nextManualIndex: (index + 1) % pairs.length };
+    }
+
+    return null;
+  }
+
+  if (strategy === 'mesh') {
+    // All-to-all: each sender takes a turn, and talks to whichever partner it
+    // has contacted least recently, so every pair eventually exchanges mail.
+    const matrix = state.contactMatrix && typeof state.contactMatrix === 'object' ? state.contactMatrix : {};
+    const startIndex = Number(state.roundRobinIndex) || 0;
+
+    for (let offset = 0; offset < accounts.length; offset++) {
+      const sender = accounts[(startIndex + offset) % accounts.length];
+      const receivers = eligibleReceivers(sender);
+      if (!receivers.length) continue;
+
+      const sent = matrix[sender.id] || {};
+      const receiver = receivers.reduce((oldest, candidate) => (
+        (sent[candidate.id] || 0) < (sent[oldest.id] || 0) ? candidate : oldest
+      ), receivers[0]);
+
+      return {
+        sender,
+        receiver,
+        nextIndex: (startIndex + offset + 1) % accounts.length,
+        recordContact: true
+      };
+    }
+
+    return null;
+  }
+
+  if (strategy === 'random') {
+    const shuffled = [...accounts];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = randomInt(0, i);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    for (const sender of shuffled) {
+      const receivers = eligibleReceivers(sender);
+      if (receivers.length) {
+        return { sender, receiver: pickRandomItem(receivers) };
+      }
+    }
+
+    return null;
+  }
+
+  // Round robin: walk senders in order so every account takes a turn.
+  const startIndex = Number(state.roundRobinIndex) || 0;
+  for (let offset = 0; offset < accounts.length; offset++) {
+    const sender = accounts[(startIndex + offset) % accounts.length];
+    const receivers = eligibleReceivers(sender);
+    if (receivers.length) {
+      const receiver = receivers[(startIndex + offset) % receivers.length];
+      return { sender, receiver, nextIndex: (startIndex + offset + 1) % accounts.length };
+    }
+  }
+
+  return null;
+}
+
+async function getWarmTalkQueue() {
+  const data = await getStorage(['warmTalkQueue']);
+  return Array.isArray(data.warmTalkQueue) ? data.warmTalkQueue : [];
+}
+
+async function saveWarmTalkQueue(queue = []) {
+  await chrome.storage.local.set({
+    warmTalkQueue: queue.slice(0, WARM_TALK_QUEUE_LIMIT)
+  }).catch(() => {});
+}
+
+async function enqueueWarmTalkStep(step) {
+  const queue = await getWarmTalkQueue();
+  queue.push(step);
+  await saveWarmTalkQueue(queue);
+}
+
+async function removeWarmTalkStep(stepId) {
+  const queue = await getWarmTalkQueue();
+  await saveWarmTalkQueue(queue.filter(step => step.id !== stepId));
+}
+
+async function planWarmTalkConversation(settings) {
+  const accounts = await getWarmTalkEnrolledAccounts(settings);
+
+  if (accounts.length < 2) {
+    await setWarmTalkStatus(WARM_TALK_STATUSES.idle, {
+      warmTalkLastError: 'WarmTalk needs at least 2 enrolled accounts. Run Deep Scan, then enrol accounts.'
+    });
+    await logWarmTalkEvent('[WarmTalk] Needs at least 2 enrolled accounts. Pausing.', 'warn');
+    return false;
+  }
+
+  const daily = await getWarmTalkDailyCounts();
+  const weekly = await getWarmTalkWeeklyCounts();
+  const dailyCap = getEffectiveDailyCap(settings);
+  const weeklyCap = Number(settings.warmTalkWeeklyCapPerAccount) || 0;
+
+  const available = accounts.filter((account) => {
+    if (dailyCap > 0 && (daily.counts[account.id] || 0) >= dailyCap) return false;
+    if (weeklyCap > 0 && (weekly.counts[account.id] || 0) >= weeklyCap) return false;
+    return true;
+  });
+
+  if (available.length < 2) {
+    const rampNote = settings.warmTalkRampUpEnabled ? ` (ramp-up cap today: ${dailyCap})` : '';
+    await logWarmTalkEvent(`[WarmTalk] Send cap reached for all accounts${rampNote}. Waiting.`, 'info');
+    await scheduleNextWarmTalkConversation(settings, 'send cap reached');
+    return false;
+  }
+
+  const state = await getStorage([
+    'warmTalkRoundRobinIndex',
+    'warmTalkManualIndex',
+    'warmTalkContactMatrix',
+    'warmTalkLastTemplateIndexes'
+  ]);
+  const pair = pickWarmTalkPair(settings, available, {
+    roundRobinIndex: Number(state.warmTalkRoundRobinIndex) || 0,
+    manualIndex: Number(state.warmTalkManualIndex) || 0,
+    contactMatrix: state.warmTalkContactMatrix || {}
+  });
+
+  if (!pair) {
+    const hint = settings.warmTalkPairingStrategy === 'manual'
+      ? 'Add at least one manual pair whose accounts are both enrolled.'
+      : 'Enable cross-provider or enrol 2+ accounts on one provider.';
+    await logWarmTalkEvent(`[WarmTalk] No valid account pair found. ${hint}`, 'warn');
+    await scheduleNextWarmTalkConversation(settings, 'no valid pair');
+    return false;
+  }
+
+  const stateUpdate = {};
+  if (Number.isFinite(pair.nextIndex)) stateUpdate.warmTalkRoundRobinIndex = pair.nextIndex;
+  if (Number.isFinite(pair.nextManualIndex)) stateUpdate.warmTalkManualIndex = pair.nextManualIndex;
+
+  if (pair.recordContact) {
+    const matrix = { ...(state.warmTalkContactMatrix || {}) };
+    matrix[pair.sender.id] = { ...(matrix[pair.sender.id] || {}), [pair.receiver.id]: Date.now() };
+    stateUpdate.warmTalkContactMatrix = matrix;
+  }
+
+  const token = generateWarmTalkToken();
+  const conversationId = `warmtalk-${token.toLowerCase()}`;
+  // The token in the subject is what lets the receiver find exactly this mail;
+  // matching on template text alone would hit the wrong row once subjects repeat.
+  // Row subjects are read back truncated to 80 chars, so trim the template to
+  // guarantee the token survives and stays matchable.
+  const tokenSuffix = ` [${token}]`;
+  const subjectBudget = 78 - tokenSuffix.length;
+  const lastIndexes = state.warmTalkLastTemplateIndexes || {};
+  const subjectPick = pickTemplateAvoidingRepeat(settings.warmTalkSubjectTemplates, lastIndexes.subject);
+  const bodyPick = pickTemplateAvoidingRepeat(settings.warmTalkBodyTemplates, lastIndexes.body);
+
+  stateUpdate.warmTalkLastTemplateIndexes = { subject: subjectPick.index, body: bodyPick.index };
+  await chrome.storage.local.set(stateUpdate).catch(() => {});
+
+  const subject = `${String(subjectPick.value).slice(0, subjectBudget).trim()}${tokenSuffix}`;
+
+  await enqueueWarmTalkStep({
+    id: `${conversationId}-send`,
+    conversationId,
+    token,
+    kind: 'send',
+    threadTurn: 0,
+    provider: pair.sender.provider,
+    accountId: pair.sender.id,
+    account_email: pair.sender.email,
+    to: pair.receiver.email,
+    partnerAccountId: pair.receiver.id,
+    partnerProvider: pair.receiver.provider,
+    partnerEmail: pair.receiver.email,
+    subject,
+    body: bodyPick.value,
+    dryRun: Boolean(settings.warmTalkDryRun),
+    dueAt: Date.now(),
+    attempts: 0
+  });
+
+  await logWarmTalkEvent(
+    `[WarmTalk] Planned: ${pair.sender.email} → ${pair.receiver.email} (${settings.warmTalkPairingStrategy})${settings.warmTalkDryRun ? ' [dry run]' : ''}`,
+    'info'
+  );
+
+  return true;
+}
+
+async function scheduleNextWarmTalkConversation(settings, reason = 'cycle complete') {
+  const min = Math.max(1, Number(settings.warmTalkMinCycleMinutes) || 5);
+  const max = Math.max(min, Number(settings.warmTalkMaxCycleMinutes) || 15);
+  const delayMinutes = randomInt(min, max);
+  const nextRunAt = Date.now() + delayMinutes * 60 * 1000;
+
+  await chrome.storage.local.set({
+    warmTalkNextRunAt: nextRunAt,
+    warmTalkLastReason: reason
+  }).catch(() => {});
+
+  await logWarmTalkEvent(`[WarmTalk] Next conversation in ~${delayMinutes} minute(s) (${reason}).`, 'info');
+}
+
+async function getWarmTalkStepSettings(step) {
+  const stored = await getStoredAutomationSettings();
+  const warmTalk = await getWarmTalkSettings();
+  const readMin = Math.max(0, Number(warmTalk.warmTalkReadTimeMinSeconds) || 0);
+  const readMax = Math.max(readMin, Number(warmTalk.warmTalkReadTimeMaxSeconds) || readMin);
+
+  return {
+    ...stored,
+    selectedProvider: step.provider,
+    selectedProviders: [step.provider],
+    enableAccountSwitching: true,
+    selectedAccounts: [step.accountId],
+    currentAccountIndex: 0,
+    sessionOpened: 0,
+    // Never let a WarmTalk run also pick up an Inbox Lab job.
+    inboxLabJob: null,
+    enableContinuousMode: false,
+    // Threads revisit the same conversation row repeatedly. Processed tracking
+    // would mark it replied on turn 1 and silently skip every later reply, so
+    // WarmTalk tracks its own state instead.
+    enableProcessedTracking: false,
+    // WarmTalk controls its own engagement settings rather than inheriting the
+    // user's Inbox Lab / manual-run preferences.
+    enableLinkOpening: Boolean(warmTalk.warmTalkEnableLinkOpening),
+    maxLinksPerEmail: Math.max(1, Number(warmTalk.warmTalkMaxLinksPerEmail) || 1),
+    // Reply Probability is decided per conversation when the receive step is
+    // queued; honour it here rather than the user's global auto-reply setting.
+    enableAutoReply: step.kind === 'receive'
+      ? Boolean(step.shouldReply)
+      : Boolean(stored.enableAutoReply),
+    warmTalkJob: {
+      id: step.id,
+      conversationId: step.conversationId,
+      kind: step.kind,
+      provider: step.provider,
+      account_email: step.account_email,
+      to: step.to || '',
+      subject: step.subject,
+      body: step.body || '',
+      sender: step.partnerEmail || '',
+      dryRun: Boolean(step.dryRun),
+      threadTurn: Number(step.threadTurn) || 0,
+      markNotSpam: warmTalk.warmTalkMarkNotSpam !== false,
+      // Randomised per step so the gap between opening and replying never looks
+      // machine-timed.
+      readDelayMs: randomInt(readMin, readMax) * 1000,
+      instructions: step.kind === 'send' ? 'compose and send' : 'open and reply',
+      folder: 'inbox'
+    }
+  };
+}
+
+async function startWarmTalkStep(step) {
+  const settings = await getWarmTalkStepSettings(step);
+  const tab = await getOrCreateMailTab(step.provider);
+
+  if (tab?.url && isProviderLoginUrl(tab.url, step.provider)) {
+    throw new Error(getProviderLoginFailure(step.provider));
+  }
+
+  if (tab?.url && !isProviderUrl(tab.url, step.provider)) {
+    throw new Error(`${getProviderLabel(step.provider)} requires manual login. Sign in, then restart WarmTalk.`);
+  }
+
+  await ensureAutomationScripts(tab.id).catch(async () => {
+    await delay(1000);
+    await ensureAutomationScripts(tab.id);
+  });
+
+  await delay(300);
+  await chrome.storage.local.set({
+    warmTalkActiveStep: { ...step, startedAt: Date.now() },
+    automationState: 'running',
+    providerAutomationStates: { [step.provider]: 'running' },
+    activeProviderTabs: { [step.provider]: tab.id }
+  }).catch(() => {});
+  await setWarmTalkStatus(WARM_TALK_STATUSES.running, { warmTalkLastError: '' });
+
+  return chrome.tabs.sendMessage(tab.id, { action: 'START', settings });
+}
+
+/**
+ * Queues the next "open and reply" step and returns the delay used, so the
+ * caller can log it. `target` is whoever must now read the mail.
+ * @returns {Promise<number>} delay in seconds
+ */
+async function enqueueWarmTalkReceiveStep(settings, step, target) {
+  const minDelay = Math.max(5, Number(settings.warmTalkReplyDelayMinSeconds) || 45);
+  const maxDelay = Math.max(minDelay, Number(settings.warmTalkReplyDelayMaxSeconds) || 180);
+  const delaySeconds = randomInt(minDelay, maxDelay);
+
+  await enqueueWarmTalkStep({
+    id: `${step.conversationId}-receive-${target.threadTurn}`,
+    conversationId: step.conversationId,
+    token: step.token,
+    kind: 'receive',
+    threadTurn: target.threadTurn,
+    provider: target.provider,
+    accountId: target.accountId,
+    account_email: target.email,
+    partnerAccountId: target.partnerAccountId,
+    partnerProvider: target.partnerProvider,
+    partnerEmail: target.partnerEmail,
+    // Match on the token alone. Replies arrive as "Re: <subject> [TOKEN]", so
+    // the token is the only part that reliably survives every turn.
+    subject: `[${step.token}]`,
+    shouldReply: Boolean(target.shouldReply),
+    dryRun: false,
+    dueAt: Date.now() + delaySeconds * 1000,
+    attempts: 0
+  });
+
+  return delaySeconds;
+}
+
+async function handleWarmTalkStepResult(job = {}, result = {}) {
+  const data = await getStorage(['warmTalkActiveStep']);
+  const step = data.warmTalkActiveStep && typeof data.warmTalkActiveStep === 'object'
+    ? data.warmTalkActiveStep
+    : null;
+
+  // A result with no active step is stale (already reclaimed by the timeout, or
+  // a duplicate). Bail out before touching automationState — some other run may
+  // legitimately own it now, and clearing it would kill that run mid-flight.
+  if (!step) {
+    return { ok: true, orphaned: true };
+  }
+
+  await removeWarmTalkStep(job.id || step.id);
+  await chrome.storage.local.set({
+    warmTalkActiveStep: null,
+    automationState: 'idle',
+    providerAutomationStates: {}
+  }).catch(() => {});
+
+  const settings = await getWarmTalkSettings();
+  const succeeded = result.status === 'completed';
+
+  if (step.kind === 'send') {
+    if (!succeeded) {
+      await recordWarmTalkStat(step.accountId, 'failed');
+      await logWarmTalkEvent(`[WarmTalk] Send step failed: ${result.summary || result.error || 'unknown'}`, 'error');
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle, {
+        warmTalkLastError: result.summary || result.error || 'Send failed'
+      });
+      await scheduleNextWarmTalkConversation(settings, 'send failed');
+      return { ok: true };
+    }
+
+    await recordWarmTalkStat(step.accountId, 'sent');
+    await bumpWarmTalkDailyCount(step.accountId);
+    await bumpWarmTalkWeeklyCount(step.accountId);
+
+    // A dry run never actually delivers mail, so there is nothing to receive.
+    if (step.dryRun) {
+      await logWarmTalkEvent('[WarmTalk] Dry run finished; skipping receive step.', 'info');
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle);
+      await scheduleNextWarmTalkConversation(settings, 'dry run complete');
+      return { ok: true };
+    }
+
+    const shouldReply = randomInt(1, 100) <= (Number(settings.warmTalkReplyProbability) || 0);
+    const delaySeconds = await enqueueWarmTalkReceiveStep(settings, step, {
+      accountId: step.partnerAccountId,
+      provider: step.partnerProvider,
+      email: step.partnerEmail,
+      partnerAccountId: step.accountId,
+      partnerProvider: step.provider,
+      partnerEmail: step.account_email,
+      threadTurn: 1,
+      shouldReply
+    });
+
+    await setWarmTalkStatus(WARM_TALK_STATUSES.idle);
+    await logWarmTalkEvent(
+      `[WarmTalk] ${step.account_email} → ${step.partnerEmail} sent. ${step.partnerEmail} opens it in ~${delaySeconds}s${shouldReply ? ' and replies' : ' without replying'}.`,
+      'success'
+    );
+
+    return { ok: true };
+  }
+
+  // Receive step
+  if (succeeded) {
+    await recordWarmTalkStat(step.accountId, 'received');
+    if (result.foundIn === 'spam') await recordWarmTalkStat(step.accountId, 'spamRescued');
+
+    // A reply is outbound mail from this account, so it counts against its caps
+    // exactly like an original send does.
+    if (result.replied) {
+      await recordWarmTalkStat(step.accountId, 'replied');
+      await bumpWarmTalkDailyCount(step.accountId);
+      await bumpWarmTalkWeeklyCount(step.accountId);
+    }
+
+    const turn = Number(step.threadTurn) || 1;
+    const maxTurns = Math.max(0, Number(settings.warmTalkThreadTurns) || 0);
+    // Keep the thread volleying only while there is actually a reply to find:
+    // without a reply the partner's mailbox has nothing new to open.
+    const canContinueThread = Boolean(
+      settings.warmTalkThreadEnabled && result.replied && turn < maxTurns
+    );
+
+    if (canContinueThread) {
+      const delaySeconds = await enqueueWarmTalkReceiveStep(settings, step, {
+        accountId: step.partnerAccountId,
+        provider: step.partnerProvider,
+        email: step.partnerEmail,
+        partnerAccountId: step.accountId,
+        partnerProvider: step.provider,
+        partnerEmail: step.account_email,
+        threadTurn: turn + 1,
+        // Every intermediate turn must reply, otherwise the chain dies here.
+        shouldReply: true
+      });
+
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle);
+      await logWarmTalkEvent(
+        `[WarmTalk] ${step.account_email} replied (turn ${turn}/${maxTurns}). ${step.partnerEmail} responds in ~${delaySeconds}s.`,
+        'success'
+      );
+
+      return { ok: true };
+    }
+
+    await logWarmTalkEvent(
+      `[WarmTalk] Conversation complete: ${step.partnerEmail} → ${step.account_email}, found in ${result.foundIn || 'inbox'}${result.replied ? ', replied' : ', no reply'}.`,
+      'success'
+    );
+  } else {
+    await recordWarmTalkStat(step.accountId, 'failed');
+    await logWarmTalkEvent(`[WarmTalk] Receive step failed: ${result.summary || result.error || 'unknown'}`, 'warn');
+  }
+
+  await setWarmTalkStatus(WARM_TALK_STATUSES.idle, {
+    warmTalkLastError: succeeded ? '' : (result.summary || result.error || '')
+  });
+  await scheduleNextWarmTalkConversation(settings, succeeded ? 'conversation complete' : 'receive failed');
+
+  return { ok: true };
+}
+
+async function tickWarmTalk() {
+  if (warmTalkTickInFlight) return;
+  warmTalkTickInFlight = true;
+
+  try {
+    const settings = await getWarmTalkSettings();
+
+    if (!settings.warmTalkEnabled) {
+      await stopWarmTalk(WARM_TALK_STATUSES.stopped);
+      return;
+    }
+
+    const gate = await getStorage([
+      'warmTalkStatus',
+      'warmTalkNextRunAt',
+      'warmTalkActiveStep',
+      'warmTalkLastError',
+      'automationState',
+      'providerAutomationStates'
+    ]);
+
+    if (gate.warmTalkStatus === WARM_TALK_STATUSES.paused) return;
+
+    // A step already handed to a tab owns the automation state until it reports.
+    if (gate.warmTalkActiveStep) {
+      const startedAt = Number(gate.warmTalkActiveStep.startedAt) || 0;
+      if (!startedAt || Date.now() - startedAt < WARM_TALK_STEP_TIMEOUT_MS) return;
+
+      // Timed out: release the automation state we claimed so the Inbox Lab
+      // worker and manual runs are not starved by a dead step.
+      await removeWarmTalkStep(gate.warmTalkActiveStep.id);
+      await recordWarmTalkStat(gate.warmTalkActiveStep.accountId, 'failed');
+      await chrome.storage.local.set({
+        warmTalkActiveStep: null,
+        automationState: 'idle',
+        providerAutomationStates: {}
+      }).catch(() => {});
+      await logWarmTalkEvent('[WarmTalk] Step timed out with no result. Releasing and rescheduling.', 'warn');
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle, { warmTalkLastError: 'Step timed out' });
+      await scheduleNextWarmTalkConversation(settings, 'step timed out');
+      return;
+    }
+
+    // Never fight the Inbox Lab worker or a manual run for the same tab.
+    if (isAutomationBusyFromStorage(gate) || await isAutomationSessionActive()) return;
+
+    const activeWindow = isWithinWarmTalkWindow(settings);
+    if (!activeWindow.ok) {
+      // Say why nothing is happening. A silent "Idle" here reads as a broken
+      // feature when the user is simply testing outside their active window.
+      const notice = `Waiting: ${activeWindow.reason}`;
+      if (gate.warmTalkLastError !== notice) {
+        await setWarmTalkStatus(WARM_TALK_STATUSES.idle, { warmTalkLastError: notice });
+        await logWarmTalkEvent(`[WarmTalk] ${notice}. Adjust Active Hours/Days to run now.`, 'info');
+      }
+      return;
+    }
+
+    if (gate.warmTalkLastError && gate.warmTalkLastError.startsWith('Waiting:')) {
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle, { warmTalkLastError: '' });
+    }
+
+    const queue = await getWarmTalkQueue();
+    const dueStep = queue.find(step => (step.dueAt || 0) <= Date.now());
+
+    if (dueStep) {
+      try {
+        await startWarmTalkStep(dueStep);
+      } catch (error) {
+        await removeWarmTalkStep(dueStep.id);
+        // startWarmTalkStep may have already claimed automationState before
+        // failing (e.g. sendMessage throws on a closed tab). Always hand it back
+        // or the Inbox Lab worker stays gated forever.
+        await chrome.storage.local.set({
+          warmTalkActiveStep: null,
+          automationState: 'idle',
+          providerAutomationStates: {}
+        }).catch(() => {});
+        await recordWarmTalkStat(dueStep.accountId, 'failed');
+        await logWarmTalkEvent(`[WarmTalk] Step could not start: ${error.message}`, 'error');
+        await setWarmTalkStatus(WARM_TALK_STATUSES.idle, { warmTalkLastError: error.message });
+        await scheduleNextWarmTalkConversation(settings, 'step start failed');
+      }
+      return;
+    }
+
+    if (queue.length) return;
+
+    const nextRunAt = Number(gate.warmTalkNextRunAt) || 0;
+    if (nextRunAt && Date.now() < nextRunAt) return;
+
+    await planWarmTalkConversation(settings);
+  } catch (error) {
+    console.warn('[WarmTalk] Tick failed', error);
+    await chrome.storage.local.set({
+      warmTalkLastError: String(error.message || error),
+      warmTalkLastUpdate: new Date().toISOString()
+    }).catch(() => {});
+  } finally {
+    warmTalkTickInFlight = false;
+  }
+}
+
+async function ensureWarmTalkAlarm() {
+  if (!chrome.alarms) return;
+
+  const existing = await chrome.alarms.get(WARM_TALK_ALARM_NAME).catch(() => null);
+  if (!existing) {
+    await chrome.alarms.create(WARM_TALK_ALARM_NAME, {
+      periodInMinutes: WARM_TALK_ALARM_PERIOD_MINUTES
+    });
+  }
+}
+
+/**
+ * @param {object} options `fresh: true` for an explicit user Start (resets pacing
+ *   and announces itself). The 30s watchdog calls this without `fresh` and must
+ *   therefore leave pacing, Paused state, and the log alone.
+ */
+async function startWarmTalk(options = {}) {
+  const settings = await getWarmTalkSettings();
+
+  if (!settings.warmTalkEnabled) {
+    await stopWarmTalk(WARM_TALK_STATUSES.stopped);
+    return { ok: false, error: 'WarmTalk is disabled' };
+  }
+
+  const accounts = await getWarmTalkEnrolledAccounts(settings);
+  if (accounts.length < 2) {
+    await stopWarmTalk(WARM_TALK_STATUSES.stopped, {
+      warmTalkLastError: 'Enrol at least 2 accounts (run Deep Scan first).'
+    });
+    return { ok: false, error: 'WarmTalk needs at least 2 enrolled accounts.' };
+  }
+
+  if (!warmTalkTimer) {
+    warmTalkTimer = setInterval(() => {
+      tickWarmTalk().catch(error => console.warn('[WarmTalk] Tick failed', error));
+    }, WARM_TALK_TICK_INTERVAL_MS);
+  }
+
+  await ensureWarmTalkAlarm().catch(error => console.warn('[WarmTalk] Alarm setup failed', error));
+
+  if (options.fresh) {
+    // Explicit user Start: run the first conversation now.
+    const freshState = { warmTalkNextRunAt: 0 };
+
+    // Day 1 of the ramp-up curve is the first time the user ever starts it.
+    // Without an anchor date the curve could never progress.
+    if (settings.warmTalkRampUpEnabled && !Number(settings.warmTalkRampUpStartedAt)) {
+      freshState.warmTalkRampUpStartedAt = Date.now();
+    }
+
+    await chrome.storage.local.set(freshState).catch(() => {});
+    await setWarmTalkStatus(WARM_TALK_STATUSES.idle, { warmTalkLastError: '' });
+
+    const rampNote = settings.warmTalkRampUpEnabled
+      ? `, ramp-up cap today: ${getEffectiveDailyCap({
+        ...settings,
+        warmTalkRampUpStartedAt: settings.warmTalkRampUpStartedAt || Date.now()
+      })}/account`
+      : '';
+    await logWarmTalkEvent(
+      `[WarmTalk] Started with ${accounts.length} account(s)${settings.warmTalkDryRun ? ' in DRY RUN mode' : ''}${rampNote}.`,
+      'success'
+    );
+  } else {
+    // Watchdog revival. Only lift a Stopped status; clobbering Running/Paused
+    // here would resume a paused run and reset the conversation gap every 30s.
+    const current = await getStorage(['warmTalkStatus']);
+    if (current.warmTalkStatus !== WARM_TALK_STATUSES.running
+      && current.warmTalkStatus !== WARM_TALK_STATUSES.paused
+      && current.warmTalkStatus !== WARM_TALK_STATUSES.idle) {
+      await setWarmTalkStatus(WARM_TALK_STATUSES.idle);
+    }
+  }
+
+  tickWarmTalk().catch(error => console.warn('[WarmTalk] Immediate tick failed', error));
+
+  return { ok: true, accounts: accounts.length, dryRun: Boolean(settings.warmTalkDryRun) };
+}
+
+async function stopWarmTalk(status = WARM_TALK_STATUSES.stopped, extra = {}) {
+  if (warmTalkTimer) {
+    clearInterval(warmTalkTimer);
+    warmTalkTimer = null;
+  }
+  warmTalkTickInFlight = false;
+
+  if (chrome.alarms) {
+    await chrome.alarms.clear(WARM_TALK_ALARM_NAME).catch(() => {});
+  }
+
+  await saveWarmTalkQueue([]);
+
+  // If a WarmTalk step was mid-flight it owns automationState; hand that back so
+  // stopping WarmTalk never leaves the Inbox Lab worker permanently gated.
+  const data = await getStorage(['warmTalkActiveStep']);
+  const releaseState = data.warmTalkActiveStep
+    ? { automationState: 'idle', providerAutomationStates: {} }
+    : {};
+
+  await chrome.storage.local.set({
+    warmTalkActiveStep: null,
+    warmTalkNextRunAt: 0,
+    ...releaseState
+  }).catch(() => {});
+  await setWarmTalkStatus(status, extra);
+}
+
+async function pauseWarmTalk() {
+  await setWarmTalkStatus(WARM_TALK_STATUSES.paused);
+  await logWarmTalkEvent('[WarmTalk] Paused.', 'info');
+  return { ok: true };
+}
+
+async function resumeWarmTalk() {
+  await setWarmTalkStatus(WARM_TALK_STATUSES.idle);
+  await logWarmTalkEvent('[WarmTalk] Resumed.', 'info');
+  tickWarmTalk().catch(() => {});
+  return { ok: true };
+}
+
+async function syncWarmTalkLifecycle() {
+  const data = await getStorage(['warmTalkEnabled']);
+
+  if (data.warmTalkEnabled === true) {
+    await startWarmTalk();
+  } else {
+    await stopWarmTalk(WARM_TALK_STATUSES.stopped);
+  }
+}
+
 // Relay messages from content scripts to popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'LOG') {
@@ -2870,6 +3880,49 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'WARM_TALK_JOB_RESULT') {
+    handleWarmTalkStepResult(message.job || {}, message.result || {})
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'START_WARM_TALK') {
+    chrome.storage.local.set({ warmTalkEnabled: true })
+      .then(() => startWarmTalk({ fresh: true }))
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'STOP_WARM_TALK') {
+    chrome.storage.local.set({ warmTalkEnabled: false })
+      .then(() => stopWarmTalk(WARM_TALK_STATUSES.stopped, { warmTalkLastError: '' }))
+      .then(() => logWarmTalkEvent('[WarmTalk] Stopped.', 'info'))
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'PAUSE_WARM_TALK') {
+    pauseWarmTalk()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'RESUME_WARM_TALK') {
+    resumeWarmTalk()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (message.action === 'DISCOVER_PROVIDER_ACCOUNTS') {
     discoverAccountsForProviders(message.providers || [], {
       forceDeepScan: Boolean(message.forceDeepScan)
@@ -2956,17 +4009,33 @@ if (chrome.alarms) {
       syncBackendWorkerLifecycle().catch(error => {
         console.warn('[Worker] Watchdog sync failed', error);
       });
+      return;
+    }
+
+    if (alarm.name === WARM_TALK_ALARM_NAME) {
+      // Same watchdog role for WarmTalk: revive the tick interval after a
+      // service-worker restart and immediately process any due step.
+      syncWarmTalkLifecycle().catch(error => {
+        console.warn('[WarmTalk] Watchdog sync failed', error);
+      });
     }
   });
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (!changes.backendConnectionStatus && !changes.backendWorkerEnabled) return;
 
-  syncBackendWorkerLifecycle().catch(error => {
-    console.warn('[Worker] Lifecycle sync failed', error);
-  });
+  if (changes.backendConnectionStatus || changes.backendWorkerEnabled) {
+    syncBackendWorkerLifecycle().catch(error => {
+      console.warn('[Worker] Lifecycle sync failed', error);
+    });
+  }
+
+  if (changes.warmTalkEnabled) {
+    syncWarmTalkLifecycle().catch(error => {
+      console.warn('[WarmTalk] Lifecycle sync failed', error);
+    });
+  }
 });
 
 // Handle extension install
@@ -3024,7 +4093,20 @@ chrome.runtime.onInstalled.addListener(details => {
       continuousNextRunAt: null,
       continuousFailureCount: 0,
       providerAutomationStates: {},
-      activeProviderTabs: {}
+      activeProviderTabs: {},
+      ...DEFAULT_WARM_TALK_SETTINGS,
+      warmTalkStatus: WARM_TALK_STATUSES.stopped,
+      warmTalkQueue: [],
+      warmTalkActiveStep: null,
+      warmTalkStats: {},
+      warmTalkDailyCounts: {},
+      warmTalkWeeklyCounts: {},
+      warmTalkRoundRobinIndex: 0,
+      warmTalkManualIndex: 0,
+      warmTalkContactMatrix: {},
+      warmTalkLastTemplateIndexes: {},
+      warmTalkNextRunAt: 0,
+      warmTalkLastError: ''
     });
 
     // Open Gmail on first install
@@ -3036,6 +4118,9 @@ chrome.runtime.onInstalled.addListener(details => {
     syncBackendWorkerLifecycle().catch(error => {
       console.warn('[Worker] Lifecycle sync failed', error);
     });
+    syncWarmTalkLifecycle().catch(error => {
+      console.warn('[WarmTalk] Lifecycle sync failed', error);
+    });
   }
 });
 
@@ -3046,10 +4131,17 @@ chrome.runtime.onStartup.addListener(() => {
   syncBackendWorkerLifecycle().catch(error => {
     console.warn('[Worker] Lifecycle sync failed', error);
   });
+  syncWarmTalkLifecycle().catch(error => {
+    console.warn('[WarmTalk] Lifecycle sync failed', error);
+  });
 });
 
 syncBackendWorkerLifecycle().catch(error => {
   console.warn('[Worker] Initial lifecycle sync failed', error);
+});
+
+syncWarmTalkLifecycle().catch(error => {
+  console.warn('[WarmTalk] Initial lifecycle sync failed', error);
 });
 
 console.log('[EmailReadAutomate] Background service worker running.');

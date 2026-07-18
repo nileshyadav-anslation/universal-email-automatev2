@@ -192,7 +192,116 @@ The **Worker** status row shows: Disconnected, Connecting, Idle, Running, Paused
 
 ---
 
-## 8. Tips & troubleshooting
+## 8. WarmTalk Feature
+
+WarmTalk makes **your own enrolled accounts email each other** like real users, to warm up those
+inboxes. It runs locally: the extension itself decides who emails whom, when, and what.
+
+It is completely separate from Inbox Lab. WarmTalk and Inbox Lab never run at the same time — one
+waits while the other works.
+
+### What one WarmTalk conversation is
+
+1. Account **A** opens Compose, types a subject and body like a human, and sends to account **B**.
+2. After a random delay, account **B** opens its mailbox and finds that exact mail (using a unique
+   tracking tag added to the subject, e.g. `[WT-A7F3K2]`).
+3. If it landed in **Spam**, B marks it **Not spam** — this is the main point of warming.
+4. B reads it for a random pause, then replies (based on your **Reply Probability**).
+5. If **Threaded Conversation** is on, A then reads B's reply and answers back, and so on for as
+   many **Thread Turns** as you set.
+6. WarmTalk goes back to Idle and schedules the next conversation.
+
+### First-time setup
+
+1. In **Settings**, click **Deep Scan Gmail** / **Refresh Accounts** so the extension discovers your
+   signed-in accounts. WarmTalk can only use accounts it has an email address for.
+2. Open the **WarmTalk** card and turn on **Enable WarmTalk**.
+3. Tick the **Providers** you want (Gmail, Yahoo, AOL, Outlook).
+4. Under **Enrolled Accounts**, tick **at least 2** accounts. Only ticked accounts can send or
+   receive.
+5. **Leave Dry Run ON for the first test.**
+6. Click **Save WarmTalk**, then **Start**.
+
+### Dry Run — test safely first
+
+With **Dry Run** ON, WarmTalk does everything *except* actually sending: it opens Compose, fills in
+the recipient, subject, and body, then discards the draft. **No real email is sent.**
+
+Watch the Activity Log. You should see `[WarmTalk] Composing...` then
+`[WarmTalk] Dry run complete — draft discarded, nothing was sent.`
+
+Once that looks right, turn **Dry Run OFF** and Start again to send for real.
+
+### Settings
+
+**Who takes part**
+
+| Setting | What it does |
+|---|---|
+| **Dry Run** | Compose and discard, never send. Turn OFF to send real mail. |
+| **Providers** | Which providers take part. |
+| **Allow Cross-Provider** | Off = Gmail only talks to Gmail. On = Gmail can email Yahoo/AOL/Outlook. |
+| **Enrolled Accounts** | The only accounts WarmTalk may use. Minimum 2. |
+
+**How they pair up**
+
+| Setting | What it does |
+|---|---|
+| **Round Robin** | Every account takes a turn as sender, in order. |
+| **Random** | Sender and receiver picked at random each time. |
+| **Mesh (all-to-all)** | Each sender talks to whichever partner it has contacted least recently, so every pair eventually exchanges mail. |
+| **Manual Pairs** | You define exactly who emails whom (e.g. A always emails B). Add pairs with the two dropdowns. |
+| **Threaded Conversation** | Instead of one email + one reply, keep volleying back and forth (A→B→A→B). More realistic. |
+| **Thread Turns** | How many replies to volley per conversation. |
+
+**Volume and timing**
+
+| Setting | What it does |
+|---|---|
+| **Gap Between Conversations** | Random minutes between conversations (min, max). |
+| **Reply Delay** | Random seconds before the receiver opens the mail (min, max). |
+| **Read Time** | Random pause between opening a mail and replying (min, max). |
+| **Daily Cap Per Account** | Max outbound mails per account per day. 0 = no cap. |
+| **Weekly Cap Per Account** | Max outbound mails per account per week. 0 = no cap. |
+| **Ramp-Up** | For cold/new accounts. Starts at a low daily volume and climbs to your daily cap over N days — the standard way to warm up without tripping spam filters. Day 1 begins the first time you press Start. |
+| **Active Hours / Days** | WarmTalk only runs inside this window. |
+
+**Content and behaviour**
+
+| Setting | What it does |
+|---|---|
+| **Subject / Body Templates** | One per line. Use `\n` in a body line for a line break. 10 of each ship by default. A random pick is used each time, and never the same one twice in a row. A unique tracking tag is appended to the subject automatically. |
+| **Reply Probability** | % of mails that get a reply. Real users don't reply to everything. (Ignored inside a thread — an unanswered thread would just stop.) |
+| **Click Links In Warmup Mail** | Opens safe links inside warmup mail, to simulate engagement. Only useful if your body templates contain links. |
+| **Max Links Per Email** | How many safe links to open. |
+| **Mark Not Spam** | Rescue warmup mail that lands in Spam. This is the main point of warming — leave it on. |
+
+Note: replies count against the daily and weekly caps too, since a reply is outbound
+mail from that account.
+
+### Controls and stats
+
+- **Start / Pause / Stop** control WarmTalk independently of the main automation.
+- **Stats** shows per-account: sent, received, replied, spam rescued, failed.
+- The **Status** row shows the live state, and tells you *why* it's waiting (for example
+  `Idle — Waiting: outside active hours`).
+
+### WarmTalk troubleshooting
+
+- **Nothing happens after Start** — check the Status row. If it says *outside active hours* or
+  *outside active days*, widen **Active Hours / Days**. The defaults are 9–18, Mon–Fri.
+- **"Needs at least 2 enrolled accounts"** — run **Deep Scan** first, then tick 2+ accounts that
+  show a real email address.
+- **Accounts don't appear in the WarmTalk list** — WarmTalk only lists accounts whose email address
+  it could detect. For Gmail, you can type the correct address into the account label in Settings.
+- **Send fails** — the provider's Compose window may have changed, or you're signed out. The log
+  names the exact step that failed (compose button, To field, subject, body, or send).
+- **Mail never found by the receiver** — keep subject templates short. A long subject can push the
+  tracking tag out of view.
+
+---
+
+## 9. Tips & troubleshooting
 
 - **Nothing happens on Start** — make sure a supported mailbox tab is open and you're logged in.
 - **Worker stuck on Disconnected** — re-run **Connect/Test**; check the Server URL, Connector ID,
@@ -208,7 +317,7 @@ The **Worker** status row shows: Disconnected, Connecting, Idle, Running, Paused
 
 ---
 
-## 9. Important notes
+## 10. Important notes
 
 - Use this only on accounts you own or are authorized to access.
 - The proxy applies to your whole browser while active, not just the automation tab.

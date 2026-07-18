@@ -1989,6 +1989,7 @@ async function ensureContentScript(tabId) {
     files: [
       'linkProcessor.js',
       'replyEngine.js',
+      'composeEngine.js',
       'processedEmailManager.js',
       'providers/gmailProvider.js',
       'providers/yahooProvider.js',
@@ -2276,10 +2277,537 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
   }
 });
-//  Init 
+//  WarmTalk
+const warmTalkEnabledToggle = $('warmTalkEnabledToggle');
+const warmTalkBody = $('warmTalkBody');
+const warmTalkStatusEl = $('warmTalkStatus');
+const warmTalkDryRunToggle = $('warmTalkDryRunToggle');
+const warmTalkProviderGroup = $('warmTalkProviderGroup');
+const warmTalkCrossProviderToggle = $('warmTalkCrossProviderToggle');
+const warmTalkAccountList = $('warmTalkAccountList');
+const warmTalkPairingSelect = $('warmTalkPairingSelect');
+const warmTalkManualPairsRow = $('warmTalkManualPairsRow');
+const warmTalkPairFromSelect = $('warmTalkPairFromSelect');
+const warmTalkPairToSelect = $('warmTalkPairToSelect');
+const warmTalkPairList = $('warmTalkPairList');
+const warmTalkThreadToggle = $('warmTalkThreadToggle');
+const warmTalkThreadTurnsRow = $('warmTalkThreadTurnsRow');
+const warmTalkThreadTurnsInput = $('warmTalkThreadTurnsInput');
+const warmTalkWeeklyCapInput = $('warmTalkWeeklyCapInput');
+const warmTalkRampUpToggle = $('warmTalkRampUpToggle');
+const warmTalkRampUpRow = $('warmTalkRampUpRow');
+const warmTalkRampUpStartInput = $('warmTalkRampUpStartInput');
+const warmTalkRampUpDaysInput = $('warmTalkRampUpDaysInput');
+const warmTalkReadMinInput = $('warmTalkReadMinInput');
+const warmTalkReadMaxInput = $('warmTalkReadMaxInput');
+const warmTalkLinkOpeningToggle = $('warmTalkLinkOpeningToggle');
+const warmTalkMaxLinksRow = $('warmTalkMaxLinksRow');
+const warmTalkMaxLinksInput = $('warmTalkMaxLinksInput');
+const warmTalkMarkNotSpamToggle = $('warmTalkMarkNotSpamToggle');
+const warmTalkMinCycleInput = $('warmTalkMinCycleInput');
+const warmTalkMaxCycleInput = $('warmTalkMaxCycleInput');
+const warmTalkReplyMinInput = $('warmTalkReplyMinInput');
+const warmTalkReplyMaxInput = $('warmTalkReplyMaxInput');
+const warmTalkDailyCapInput = $('warmTalkDailyCapInput');
+const warmTalkReplyProbabilityInput = $('warmTalkReplyProbabilityInput');
+const warmTalkHoursStartInput = $('warmTalkHoursStartInput');
+const warmTalkHoursEndInput = $('warmTalkHoursEndInput');
+const warmTalkDayGroup = $('warmTalkDayGroup');
+const warmTalkSubjectsInput = $('warmTalkSubjectsInput');
+const warmTalkBodiesInput = $('warmTalkBodiesInput');
+const warmTalkStatsList = $('warmTalkStatsList');
+
+const WARM_TALK_KEYS = [
+  'warmTalkEnabled',
+  'warmTalkDryRun',
+  'warmTalkProviders',
+  'warmTalkAccounts',
+  'warmTalkPairingStrategy',
+  'warmTalkManualPairs',
+  'warmTalkAllowCrossProvider',
+  'warmTalkMinCycleMinutes',
+  'warmTalkMaxCycleMinutes',
+  'warmTalkReplyDelayMinSeconds',
+  'warmTalkReplyDelayMaxSeconds',
+  'warmTalkThreadEnabled',
+  'warmTalkThreadTurns',
+  'warmTalkDailyCapPerAccount',
+  'warmTalkWeeklyCapPerAccount',
+  'warmTalkRampUpEnabled',
+  'warmTalkRampUpStartPerDay',
+  'warmTalkRampUpDays',
+  'warmTalkActiveHoursStart',
+  'warmTalkActiveHoursEnd',
+  'warmTalkActiveDays',
+  'warmTalkReplyProbability',
+  'warmTalkReadTimeMinSeconds',
+  'warmTalkReadTimeMaxSeconds',
+  'warmTalkEnableLinkOpening',
+  'warmTalkMaxLinksPerEmail',
+  'warmTalkMarkNotSpam',
+  'warmTalkSubjectTemplates',
+  'warmTalkBodyTemplates',
+  'warmTalkStatus',
+  'warmTalkStats',
+  'warmTalkLastError'
+];
+
+// Mirrors the enrolled-account list; manual pairs are chosen from these.
+let warmTalkUsableAccounts = [];
+let warmTalkManualPairs = [];
+
+function getCheckedValues(group) {
+  if (!group) return [];
+  return Array.from(group.querySelectorAll('input[type="checkbox"]:checked')).map(input => input.value);
+}
+
+function setCheckedValues(group, values = []) {
+  if (!group) return;
+  const wanted = new Set((values || []).map(String));
+  Array.from(group.querySelectorAll('input[type="checkbox"]')).forEach(input => {
+    input.checked = wanted.has(String(input.value));
+  });
+}
+
+function getWarmTalkSelectedAccounts() {
+  if (!warmTalkAccountList) return [];
+  return Array.from(warmTalkAccountList.querySelectorAll('input[type="checkbox"]:checked')).map(input => input.value);
+}
+
+function extractAccountEmail(account = {}) {
+  const match = `${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`
+    .match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : '';
+}
+
+function renderWarmTalkAccounts(accounts = [], selectedIds = []) {
+  if (!warmTalkAccountList) return;
+
+  const providers = new Set(getCheckedValues(warmTalkProviderGroup));
+  // WarmTalk can only drive accounts we can resolve an address for; anything
+  // else could never be used as a recipient.
+  const usable = accounts
+    .filter(account => account?.id && providers.has(getAccountProviderId(account)))
+    .map(account => ({ ...account, email: extractAccountEmail(account) }))
+    .filter(account => account.email);
+
+  warmTalkUsableAccounts = usable;
+  populateWarmTalkPairSelects();
+  // Drop any manual pair whose accounts are no longer available.
+  const usableIds = new Set(usable.map(account => account.id));
+  warmTalkManualPairs = warmTalkManualPairs.filter(pair => usableIds.has(pair.from) && usableIds.has(pair.to));
+  renderWarmTalkManualPairs();
+
+  warmTalkAccountList.innerHTML = '';
+
+  if (!usable.length) {
+    const empty = document.createElement('div');
+    empty.className = 'account-empty';
+    empty.textContent = 'No accounts with a detected email address. Run Deep Scan in Settings.';
+    warmTalkAccountList.appendChild(empty);
+    return;
+  }
+
+  const selected = new Set(selectedIds);
+
+  usable.forEach((account) => {
+    const row = document.createElement('label');
+    row.className = 'account-option';
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = account.id;
+    input.checked = selected.has(account.id);
+    input.addEventListener('change', () => saveWarmTalkSettings({ silent: true }));
+
+    const text = document.createElement('span');
+    text.className = 'account-label-text';
+    text.textContent = `${getProviderLabel(getAccountProviderId(account))} — ${account.email}`;
+
+    row.append(input, text);
+    warmTalkAccountList.appendChild(row);
+  });
+}
+
+function warmTalkAccountLabel(accountId) {
+  const account = warmTalkUsableAccounts.find(item => item.id === accountId);
+  return account ? account.email : accountId;
+}
+
+function populateWarmTalkPairSelects() {
+  [warmTalkPairFromSelect, warmTalkPairToSelect].forEach((select) => {
+    if (!select) return;
+    const previous = select.value;
+    select.innerHTML = '';
+
+    warmTalkUsableAccounts.forEach((account) => {
+      const option = document.createElement('option');
+      option.value = account.id;
+      option.textContent = account.email;
+      select.appendChild(option);
+    });
+
+    if (previous && warmTalkUsableAccounts.some(account => account.id === previous)) {
+      select.value = previous;
+    }
+  });
+}
+
+function renderWarmTalkManualPairs() {
+  if (!warmTalkPairList) return;
+  warmTalkPairList.innerHTML = '';
+
+  if (!warmTalkManualPairs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'account-empty';
+    empty.textContent = 'No manual pairs yet.';
+    warmTalkPairList.appendChild(empty);
+    return;
+  }
+
+  warmTalkManualPairs.forEach((pair, index) => {
+    const row = document.createElement('div');
+    row.className = 'account-option';
+
+    const text = document.createElement('span');
+    text.className = 'account-label-text';
+    text.textContent = `${warmTalkAccountLabel(pair.from)} → ${warmTalkAccountLabel(pair.to)}`;
+
+    const remove = document.createElement('button');
+    remove.className = 'btn settings-action danger';
+    remove.type = 'button';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => {
+      warmTalkManualPairs.splice(index, 1);
+      renderWarmTalkManualPairs();
+      saveWarmTalkSettings({ silent: true });
+    });
+
+    row.append(text, remove);
+    warmTalkPairList.appendChild(row);
+  });
+}
+
+function syncWarmTalkConditionalRows() {
+  if (warmTalkManualPairsRow) {
+    warmTalkManualPairsRow.style.display = warmTalkPairingSelect.value === 'manual' ? 'flex' : 'none';
+  }
+  if (warmTalkThreadTurnsRow) {
+    warmTalkThreadTurnsRow.style.display = warmTalkThreadToggle.checked ? 'flex' : 'none';
+  }
+  if (warmTalkRampUpRow) {
+    warmTalkRampUpRow.style.display = warmTalkRampUpToggle.checked ? 'flex' : 'none';
+  }
+  if (warmTalkMaxLinksRow) {
+    warmTalkMaxLinksRow.style.display = warmTalkLinkOpeningToggle.checked ? 'flex' : 'none';
+  }
+}
+
+function renderWarmTalkStats(stats = {}) {
+  if (!warmTalkStatsList) return;
+
+  const entries = Object.entries(stats || {});
+  warmTalkStatsList.innerHTML = '';
+
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'account-empty';
+    empty.textContent = 'No WarmTalk activity yet.';
+    warmTalkStatsList.appendChild(empty);
+    return;
+  }
+
+  entries.forEach(([accountId, stat]) => {
+    const row = document.createElement('div');
+    row.className = 'account-label-text';
+    row.textContent = `${accountId} — sent ${stat.sent || 0}, received ${stat.received || 0}, replied ${stat.replied || 0}, spam rescued ${stat.spamRescued || 0}, failed ${stat.failed || 0}`;
+    warmTalkStatsList.appendChild(row);
+  });
+}
+
+function syncWarmTalkPauseButton(status = 'Stopped') {
+  const button = $('btnPauseWarmTalk');
+  if (!button) return;
+  button.textContent = status === 'Paused' ? 'Resume' : 'Pause';
+}
+
+function setWarmTalkStatusLabel(status = 'Stopped', lastError = '') {
+  if (!warmTalkStatusEl) return;
+  warmTalkStatusEl.textContent = lastError ? `${status} — ${lastError}` : status;
+  syncWarmTalkPauseButton(status);
+}
+
+async function loadWarmTalkUi(options = {}) {
+  if (!warmTalkEnabledToggle) return;
+
+  const data = await getStorage(WARM_TALK_KEYS.concat(['discoveredAccounts']));
+
+  // `warmTalkEnabled` only flips to true once the user presses Start, so when
+  // the user has just opened the panel we must not re-derive the toggle from
+  // storage — that would collapse the card and make the feature unreachable.
+  if (!options.preserveToggle) {
+    warmTalkEnabledToggle.checked = data.warmTalkEnabled === true;
+    warmTalkBody.style.display = warmTalkEnabledToggle.checked ? 'block' : 'none';
+  }
+
+  warmTalkDryRunToggle.checked = data.warmTalkDryRun !== false;
+  warmTalkCrossProviderToggle.checked = Boolean(data.warmTalkAllowCrossProvider);
+  setCheckedValues(warmTalkProviderGroup, Array.isArray(data.warmTalkProviders) && data.warmTalkProviders.length
+    ? data.warmTalkProviders
+    : ['gmail']);
+  setCheckedValues(warmTalkDayGroup, Array.isArray(data.warmTalkActiveDays) && data.warmTalkActiveDays.length
+    ? data.warmTalkActiveDays
+    : [1, 2, 3, 4, 5]);
+
+  warmTalkPairingSelect.value = data.warmTalkPairingStrategy || 'roundRobin';
+  warmTalkThreadToggle.checked = Boolean(data.warmTalkThreadEnabled);
+  warmTalkThreadTurnsInput.value = data.warmTalkThreadTurns ?? 2;
+  warmTalkRampUpToggle.checked = Boolean(data.warmTalkRampUpEnabled);
+  warmTalkRampUpStartInput.value = data.warmTalkRampUpStartPerDay ?? 2;
+  warmTalkRampUpDaysInput.value = data.warmTalkRampUpDays ?? 7;
+  warmTalkReadMinInput.value = data.warmTalkReadTimeMinSeconds ?? 5;
+  warmTalkReadMaxInput.value = data.warmTalkReadTimeMaxSeconds ?? 20;
+  warmTalkLinkOpeningToggle.checked = Boolean(data.warmTalkEnableLinkOpening);
+  warmTalkMaxLinksInput.value = data.warmTalkMaxLinksPerEmail ?? 1;
+  warmTalkMarkNotSpamToggle.checked = data.warmTalkMarkNotSpam !== false;
+  warmTalkMinCycleInput.value = data.warmTalkMinCycleMinutes ?? 5;
+  warmTalkMaxCycleInput.value = data.warmTalkMaxCycleMinutes ?? 15;
+  warmTalkReplyMinInput.value = data.warmTalkReplyDelayMinSeconds ?? 45;
+  warmTalkReplyMaxInput.value = data.warmTalkReplyDelayMaxSeconds ?? 180;
+  warmTalkDailyCapInput.value = data.warmTalkDailyCapPerAccount ?? 10;
+  warmTalkWeeklyCapInput.value = data.warmTalkWeeklyCapPerAccount ?? 40;
+  warmTalkReplyProbabilityInput.value = data.warmTalkReplyProbability ?? 70;
+  warmTalkHoursStartInput.value = data.warmTalkActiveHoursStart ?? 9;
+  warmTalkHoursEndInput.value = data.warmTalkActiveHoursEnd ?? 18;
+  warmTalkManualPairs = Array.isArray(data.warmTalkManualPairs) ? [...data.warmTalkManualPairs] : [];
+  warmTalkSubjectsInput.value = Array.isArray(data.warmTalkSubjectTemplates)
+    ? data.warmTalkSubjectTemplates.join('\n')
+    : '';
+  warmTalkBodiesInput.value = Array.isArray(data.warmTalkBodyTemplates)
+    ? data.warmTalkBodyTemplates.map(body => String(body).replace(/\n/g, '\\n')).join('\n')
+    : '';
+
+  renderWarmTalkAccounts(
+    Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [],
+    Array.isArray(data.warmTalkAccounts) ? data.warmTalkAccounts : []
+  );
+  renderWarmTalkStats(data.warmTalkStats || {});
+  setWarmTalkStatusLabel(data.warmTalkStatus || 'Stopped', data.warmTalkLastError || '');
+  syncWarmTalkConditionalRows();
+}
+
+function parseNumberInput(input, fallback, min, max) {
+  const value = parseInt(input?.value, 10);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+async function saveWarmTalkSettings(options = {}) {
+  const minCycle = parseNumberInput(warmTalkMinCycleInput, 5, 1, 240);
+  const maxCycle = Math.max(minCycle, parseNumberInput(warmTalkMaxCycleInput, 15, 1, 240));
+  const minReply = parseNumberInput(warmTalkReplyMinInput, 45, 5, 3600);
+  const maxReply = Math.max(minReply, parseNumberInput(warmTalkReplyMaxInput, 180, 5, 3600));
+
+  const subjects = warmTalkSubjectsInput.value
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  const bodies = warmTalkBodiesInput.value
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/\\n/g, '\n'));
+
+  const minRead = parseNumberInput(warmTalkReadMinInput, 5, 0, 600);
+  const maxRead = Math.max(minRead, parseNumberInput(warmTalkReadMaxInput, 20, 0, 600));
+
+  const payload = {
+    warmTalkDryRun: warmTalkDryRunToggle.checked,
+    warmTalkProviders: getCheckedValues(warmTalkProviderGroup),
+    warmTalkAccounts: getWarmTalkSelectedAccounts(),
+    warmTalkPairingStrategy: warmTalkPairingSelect.value,
+    warmTalkManualPairs: warmTalkManualPairs,
+    warmTalkAllowCrossProvider: warmTalkCrossProviderToggle.checked,
+    warmTalkMinCycleMinutes: minCycle,
+    warmTalkMaxCycleMinutes: maxCycle,
+    warmTalkReplyDelayMinSeconds: minReply,
+    warmTalkReplyDelayMaxSeconds: maxReply,
+    warmTalkThreadEnabled: warmTalkThreadToggle.checked,
+    warmTalkThreadTurns: parseNumberInput(warmTalkThreadTurnsInput, 2, 1, 10),
+    warmTalkDailyCapPerAccount: parseNumberInput(warmTalkDailyCapInput, 10, 0, 200),
+    warmTalkWeeklyCapPerAccount: parseNumberInput(warmTalkWeeklyCapInput, 40, 0, 1000),
+    warmTalkRampUpEnabled: warmTalkRampUpToggle.checked,
+    warmTalkRampUpStartPerDay: parseNumberInput(warmTalkRampUpStartInput, 2, 1, 100),
+    warmTalkRampUpDays: parseNumberInput(warmTalkRampUpDaysInput, 7, 1, 60),
+    warmTalkReplyProbability: parseNumberInput(warmTalkReplyProbabilityInput, 70, 0, 100),
+    warmTalkReadTimeMinSeconds: minRead,
+    warmTalkReadTimeMaxSeconds: maxRead,
+    warmTalkEnableLinkOpening: warmTalkLinkOpeningToggle.checked,
+    warmTalkMaxLinksPerEmail: parseNumberInput(warmTalkMaxLinksInput, 1, 1, 10),
+    warmTalkMarkNotSpam: warmTalkMarkNotSpamToggle.checked,
+    warmTalkActiveHoursStart: parseNumberInput(warmTalkHoursStartInput, 9, 0, 23),
+    warmTalkActiveHoursEnd: parseNumberInput(warmTalkHoursEndInput, 18, 0, 23),
+    warmTalkActiveDays: getCheckedValues(warmTalkDayGroup).map(Number),
+    warmTalkSubjectTemplates: subjects,
+    warmTalkBodyTemplates: bodies
+  };
+
+  await chrome.storage.local.set(payload);
+
+  // Reflect the corrected min/max back so the user sees what was actually stored.
+  warmTalkMinCycleInput.value = minCycle;
+  warmTalkMaxCycleInput.value = maxCycle;
+  warmTalkReplyMinInput.value = minReply;
+  warmTalkReplyMaxInput.value = maxReply;
+  warmTalkReadMinInput.value = minRead;
+  warmTalkReadMaxInput.value = maxRead;
+
+  if (!options.silent) {
+    log('WarmTalk settings saved.', 'success', { persist: false });
+  }
+
+  return payload;
+}
+
+if (warmTalkEnabledToggle) {
+  warmTalkEnabledToggle.addEventListener('change', async () => {
+    warmTalkBody.style.display = warmTalkEnabledToggle.checked ? 'block' : 'none';
+
+    if (!warmTalkEnabledToggle.checked) {
+      await chrome.runtime.sendMessage({ action: 'STOP_WARM_TALK' }).catch(() => {});
+      setWarmTalkStatusLabel('Stopped');
+      log('WarmTalk disabled.', 'info', { persist: false });
+      return;
+    }
+
+    await loadWarmTalkUi({ preserveToggle: true });
+    log('WarmTalk panel opened. Configure accounts, then press Start.', 'info', { persist: false });
+  });
+
+  warmTalkProviderGroup.addEventListener('change', async () => {
+    const data = await getStorage(['discoveredAccounts', 'warmTalkAccounts']);
+    renderWarmTalkAccounts(
+      Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [],
+      Array.isArray(data.warmTalkAccounts) ? data.warmTalkAccounts : []
+    );
+  });
+
+  $('btnWarmTalkSelectAll').addEventListener('click', () => {
+    const checkboxes = Array.from(warmTalkAccountList.querySelectorAll('input[type="checkbox"]'));
+    if (!checkboxes.length) {
+      log('No WarmTalk-capable accounts to select.', 'warn', { persist: false });
+      return;
+    }
+    checkboxes.forEach(input => { input.checked = true; });
+    saveWarmTalkSettings({ silent: true });
+    log(`Enrolled all ${checkboxes.length} account(s) in WarmTalk.`, 'success', { persist: false });
+  });
+
+  $('btnWarmTalkRefreshAccounts').addEventListener('click', async () => {
+    const data = await getStorage(['discoveredAccounts', 'warmTalkAccounts']);
+    renderWarmTalkAccounts(
+      Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [],
+      Array.isArray(data.warmTalkAccounts) ? data.warmTalkAccounts : []
+    );
+    log('WarmTalk account list refreshed.', 'info', { persist: false });
+  });
+
+  [warmTalkPairingSelect, warmTalkThreadToggle, warmTalkRampUpToggle, warmTalkLinkOpeningToggle]
+    .forEach(control => control.addEventListener('change', syncWarmTalkConditionalRows));
+
+  $('btnWarmTalkAddPair').addEventListener('click', () => {
+    const from = warmTalkPairFromSelect.value;
+    const to = warmTalkPairToSelect.value;
+
+    if (!from || !to) {
+      log('Enrol accounts before adding a manual pair.', 'warn', { persist: false });
+      return;
+    }
+
+    if (from === to) {
+      log('A manual pair needs two different accounts.', 'warn', { persist: false });
+      return;
+    }
+
+    if (warmTalkManualPairs.some(pair => pair.from === from && pair.to === to)) {
+      log('That pair already exists.', 'warn', { persist: false });
+      return;
+    }
+
+    warmTalkManualPairs.push({ from, to });
+    renderWarmTalkManualPairs();
+    saveWarmTalkSettings({ silent: true });
+    log(`Manual pair added: ${warmTalkAccountLabel(from)} → ${warmTalkAccountLabel(to)}`, 'success', { persist: false });
+  });
+
+  $('btnSaveWarmTalkSettings').addEventListener('click', () => {
+    saveWarmTalkSettings();
+  });
+
+  $('btnStartWarmTalk').addEventListener('click', async () => {
+    const payload = await saveWarmTalkSettings({ silent: true });
+
+    if (payload.warmTalkAccounts.length < 2) {
+      log('WarmTalk needs at least 2 enrolled accounts.', 'error', { persist: false });
+      return;
+    }
+
+    const result = await chrome.runtime.sendMessage({ action: 'START_WARM_TALK' }).catch(error => ({
+      ok: false,
+      error: error.message
+    }));
+
+    if (!result || !result.ok) {
+      log(`WarmTalk start failed: ${result?.error || 'Unknown error'}`, 'error', { persist: false });
+      return;
+    }
+
+    log(
+      `WarmTalk started with ${result.accounts} account(s)${result.dryRun ? ' in DRY RUN mode (no real emails)' : ''}.`,
+      'success',
+      { persist: false }
+    );
+  });
+
+  // Pause doubles as Resume so a paused run is never stranded.
+  $('btnPauseWarmTalk').addEventListener('click', async () => {
+    const data = await getStorage(['warmTalkStatus']);
+    const paused = data.warmTalkStatus === 'Paused';
+    const action = paused ? 'RESUME_WARM_TALK' : 'PAUSE_WARM_TALK';
+
+    await chrome.runtime.sendMessage({ action }).catch(() => {});
+    log(paused ? 'WarmTalk resumed.' : 'WarmTalk paused.', 'info', { persist: false });
+    syncWarmTalkPauseButton(paused ? 'Idle' : 'Paused');
+  });
+
+  $('btnStopWarmTalk').addEventListener('click', async () => {
+    await chrome.runtime.sendMessage({ action: 'STOP_WARM_TALK' }).catch(() => {});
+    warmTalkEnabledToggle.checked = false;
+    warmTalkBody.style.display = 'none';
+    setWarmTalkStatusLabel('Stopped');
+    log('WarmTalk stopped.', 'info', { persist: false });
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !warmTalkStatusEl) return;
+
+  if (changes.warmTalkStatus || changes.warmTalkLastError) {
+    getStorage(['warmTalkStatus', 'warmTalkLastError']).then(data => {
+      setWarmTalkStatusLabel(data.warmTalkStatus || 'Stopped', data.warmTalkLastError || '');
+    });
+  }
+
+  if (changes.warmTalkStats) {
+    renderWarmTalkStats(changes.warmTalkStats.newValue || {});
+  }
+});
+
+//  Init
 document.addEventListener('DOMContentLoaded', async () => {
   loadActivityLogs();
   loadSettings();
+  loadWarmTalkUi();
   await checkGmailAndShowAlert();
   const restoredState = await restoreAutomationState();
   if (restoredState === 'running' || restoredState === 'paused') {

@@ -410,5 +410,22 @@
   window.ReplyEngine = {
     getRandomReplyTemplate,
     sendReply,
+    // Shared DOM/typing helpers reused by ComposeEngine. Exported only; reply
+    // behaviour above is unchanged.
+    utils: {
+      sleep,
+      randomInt,
+      isVisibleEnabled,
+      isEditableReplyBody,
+      findFirstMatch,
+      findFirst,
+      waitForElement,
+      waitForElementMatch,
+      getElementText,
+      normalizeText,
+      typeText,
+      waitForTypedText,
+      waitUntilManualActivityQuiet,
+    },
   };
 })();

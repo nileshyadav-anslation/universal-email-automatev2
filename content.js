@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-07-07-yahoo-cold-start-v1";
+  const CONTENT_SCRIPT_VERSION = "2026-07-17-warmtalk-v1";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");
@@ -1689,7 +1689,24 @@ zoho: {
       log(`Account switching failed: ${result?.error || "Unknown error"}`, "error");
       if (result?.stopAutomation) {
         state = "stopped";
-        sendMsg("ERROR", { message: result.error || "Proxy failed before account automation" });
+        const pendingWarmTalkJob = getWarmTalkJob();
+        if (pendingWarmTalkJob) {
+          // Report the step so WarmTalk reschedules instead of waiting out its
+          // timeout, and so background skips the continuous-mode terminal path.
+          await postWarmTalkJobResult(pendingWarmTalkJob, {
+            status: "failed",
+            kind: pendingWarmTalkJob.kind || "receive",
+            to: pendingWarmTalkJob.to || "",
+            subject: pendingWarmTalkJob.subject || "",
+            account_email: pendingWarmTalkJob.account_email || "",
+            summary: `WarmTalk account switch failed: ${result.error || "Proxy failed"}`,
+            error: "account_switch_failed",
+          });
+        }
+        sendMsg("ERROR", {
+          message: result.error || "Proxy failed before account automation",
+          warmTalkJobId: pendingWarmTalkJob?.id,
+        });
         return true;
       }
       return false;
@@ -2654,7 +2671,8 @@ zoho: {
     return true;
   }
 
-  async function runInboxLabProviderJob(job) {
+  async function runInboxLabProviderJob(job, options = {}) {
+    const tag = options.logPrefix || "[InboxLab]";
     const folder = getInboxLabProviderFolder(job);
     const folderLabel = getInboxLabFolderLabel(folder);
     const providerLabel = getInboxLabProviderLabel();
@@ -2670,21 +2688,21 @@ zoho: {
       };
     }
 
-    log(`[InboxLab] Running ${providerLabel} job ${job.id}${job.subject ? `: ${job.subject}` : ""}`, "info");
+    log(`${tag} Running ${providerLabel} job ${job.id}${job.subject ? `: ${job.subject}` : ""}`, "info");
     if (getInboxLabJobFolder(job) === "promotions" && folder !== "promotions") {
-      log(`[InboxLab] ${providerLabel} has no Promotions category. Using Inbox.`, "warn");
+      log(`${tag} ${providerLabel} has no Promotions category. Using Inbox.`, "warn");
     }
-    log(`[InboxLab] Opening ${providerLabel} ${folderLabel}`, "info");
+    log(`${tag} Opening ${providerLabel} ${folderLabel}`, "info");
     await navigateToInboxLabMailbox(folder);
 
     let row = await findInboxLabJobRow(job, 3);
 
     if (!row && job.subject && isGmailProvider()) {
-      log(`[InboxLab] Job email not visible in ${folderLabel}. Searching Gmail...`, "warn");
+      log(`${tag} Job email not visible in ${folderLabel}. Searching Gmail...`, "warn");
       await navigateToGmailSearchForJob(job, folder);
       row = await findInboxLabJobRow(job, 2);
     } else if (!row && job.subject && isScrollableMailboxProvider()) {
-      log(`[InboxLab] Job email not visible in ${folderLabel} after scrolling ${providerLabel}.`, "warn");
+      log(`${tag} Job email not visible in ${folderLabel} after scrolling ${providerLabel}.`, "warn");
     }
 
     if (!row) {
@@ -2700,7 +2718,7 @@ zoho: {
 
     const rowId = getEmailIdentity(row) || `inboxlab:${job.id}`;
     const subject = getEmailSubject(row);
-    log(`[InboxLab] Opening ${providerLabel} job email from ${folderLabel}: "${subject}"`, "info");
+    log(`${tag} Opening ${providerLabel} job email from ${folderLabel}: "${subject}"`, "info");
 
     const opened = await openEmailWithRetry(row, subject, rowId, folderLabel);
     if (!opened) {
@@ -2714,7 +2732,7 @@ zoho: {
       };
     }
 
-    log("[InboxLab] Job email opened", "success");
+    log(`${tag} Job email opened`, "success");
     processedHrefs.add(getProcessedCacheKey(rowId));
     emailsOpened++;
     sendMsg("EMAIL_OPENED", { count: emailsOpened, subject });
@@ -2723,6 +2741,14 @@ zoho: {
     const originalLinkOpening = settings.enableLinkOpening;
     if (wantsLinkClick) {
       settings.enableLinkOpening = true;
+    }
+
+    // Simulated reading pause before any reply. WarmTalk randomises this per
+    // step; the Inbox Lab path passes nothing and is unaffected.
+    const readDelayMs = Number(options.readDelayMs) || 0;
+    if (readDelayMs > 0) {
+      log(`${tag} Reading for ${Math.round(readDelayMs / 1000)}s…`, "info");
+      await sleep(readDelayMs);
     }
 
     let processedResult;
@@ -2763,6 +2789,146 @@ zoho: {
     };
   }
 
+  //  WarmTalk — account-to-account warmup conversations
+  function getWarmTalkJob() {
+    const job = settings.warmTalkJob;
+    if (!job || typeof job !== "object" || !job.id) return null;
+    return job;
+  }
+
+  async function postWarmTalkJobResult(job, result) {
+    const response = await sendRuntimeMessage({
+      action: "WARM_TALK_JOB_RESULT",
+      provider: providerName,
+      job,
+      result,
+    });
+
+    if (!response || !response.ok) {
+      log(`[WarmTalk] Result post failed: ${response?.error || "Unknown error"}`, "error");
+      return false;
+    }
+
+    log("[WarmTalk] Result posted", "success");
+    return true;
+  }
+
+  async function runWarmTalkSendJob(job) {
+    const providerLabel = getProviderDisplayLabel();
+
+    if (!window.ComposeEngine || !window.ComposeEngine.isSupportedProvider(providerName)) {
+      return {
+        status: "failed",
+        kind: "send",
+        summary: `WarmTalk compose is not supported for ${providerLabel}.`,
+        error: "unsupported_provider",
+      };
+    }
+
+    log(
+      `[WarmTalk] Composing ${providerLabel} email to ${job.to}${job.dryRun ? " (dry run)" : ""}`,
+      "info"
+    );
+
+    try {
+      const result = await window.ComposeEngine.sendNewEmail(
+        providerName,
+        { to: job.to, subject: job.subject, body: job.body },
+        {
+          waitForManualActivityQuiet,
+          onDiagnostic: (message) => log(`[WarmTalk] compose debug: ${message}`, "info"),
+        },
+        { dryRun: Boolean(job.dryRun) }
+      );
+
+      if (result.dryRun) {
+        log("[WarmTalk] Dry run complete — draft discarded, nothing was sent.", "success");
+        return {
+          status: "completed",
+          kind: "send",
+          dryRun: true,
+          to: job.to,
+          subject: job.subject,
+          account_email: job.account_email || "",
+          summary: `Dry run: composed to ${job.to} without sending.`,
+        };
+      }
+
+      log(`[WarmTalk] Email sent to ${job.to}`, "success");
+      return {
+        status: "completed",
+        kind: "send",
+        dryRun: false,
+        to: job.to,
+        subject: job.subject,
+        account_email: job.account_email || "",
+        summary: `Sent to ${job.to}.`,
+      };
+    } catch (error) {
+      log(`[WarmTalk] Send failed: ${error.message}`, "error");
+      return {
+        status: "failed",
+        kind: "send",
+        to: job.to,
+        subject: job.subject,
+        account_email: job.account_email || "",
+        summary: `Send failed: ${error.message}`,
+        error: "send_failed",
+      };
+    }
+  }
+
+  async function runWarmTalkReceiveJob(job) {
+    const providerLabel = getProviderDisplayLabel();
+    // Warmup mail can land in Inbox, Spam, or (Gmail) Promotions. Try each
+    // before declaring it missing.
+    const folders = isGmailProvider() ? ["inbox", "spam", "promotions"] : ["inbox", "spam"];
+    let lastResult = null;
+
+    for (const folder of folders) {
+      const result = await runInboxLabProviderJob(
+        { ...job, folder },
+        { logPrefix: "[WarmTalk]", readDelayMs: job.readDelayMs }
+      );
+      lastResult = result;
+
+      if (result.status === "completed") {
+        // Rescuing warmup mail out of Spam is the whole point of warming, so do
+        // it whenever we found it there — unless the user turned it off.
+        if (folder === "spam" && job.markNotSpam !== false) {
+          const mailboxProvider = getMailboxProvider();
+          if (mailboxProvider?.moveOpenedSpamEmailToInbox) {
+            log("[WarmTalk] Warmup mail landed in Spam. Marking Not spam...", "warn");
+            await mailboxProvider.moveOpenedSpamEmailToInbox();
+          }
+        }
+
+        return { ...result, kind: "receive", foundIn: folder };
+      }
+
+      if (result.error !== "not_found") {
+        return { ...result, kind: "receive", foundIn: folder };
+      }
+
+      if (state === "stopped") break;
+    }
+
+    log(`[WarmTalk] Warmup mail not found in any ${providerLabel} folder.`, "warn");
+    return {
+      ...(lastResult || {}),
+      kind: "receive",
+      status: "failed",
+      error: "not_found",
+      account_email: job.account_email || "",
+      summary: `Warmup mail not found in ${providerLabel}.`,
+    };
+  }
+
+  async function runWarmTalkJob(job) {
+    if (job.kind === "send") return runWarmTalkSendJob(job);
+    return runWarmTalkReceiveJob(job);
+  }
+
   async function runAutomation() {
     activeAccount = getActiveAccount();
     let accountEmailsOpened = 0;
@@ -2788,10 +2954,24 @@ zoho: {
         log("Continuing on current account after initial switch failure", "warn");
       }
 
-      log(`Scanning ${activeAccount.label || activeAccount.id} for unread emails...`);
+      log(
+        getWarmTalkJob()
+          ? `[WarmTalk] Using account ${activeAccount.label || activeAccount.id}...`
+          : `Scanning ${activeAccount.label || activeAccount.id} for unread emails...`
+      );
       await waitForInboxReadyAfterSwitch(activeAccount, 25000);
-    } else {
+    } else if (!getWarmTalkJob()) {
       log(isGmailProvider() ? "Scanning Gmail Spam first, then Inbox…" : "Scanning for unread emails...");
+    }
+
+    const warmTalkJob = getWarmTalkJob();
+    if (warmTalkJob) {
+      const result = await runWarmTalkJob(warmTalkJob);
+      await postWarmTalkJobResult(warmTalkJob, result);
+      state = "idle";
+      sendMsg("DONE", { warmTalkJobId: warmTalkJob.id });
+      log("WarmTalk task complete.", "success");
+      return;
     }
 
     const inboxLabJob = getInboxLabJob();
@@ -3206,9 +3386,27 @@ zoho: {
         ...msg.settings,
         currentAccountIndex: msg.settings?.currentAccountIndex || 0,
         sessionOpened: msg.settings?.sessionOpened || 0,
+        // Each START fully owns the job context. Without this, a finished
+        // WarmTalk job would linger in `settings` and hijack the next normal or
+        // Inbox Lab run in this tab, re-sending the warmup mail and silently
+        // dropping the real job.
+        warmTalkJob: msg.settings?.warmTalkJob || null,
+        inboxLabJob: msg.settings?.inboxLabJob || null,
       };
       runAutomation().catch(async (err) => {
         console.error("[EmailReadAutomate] Error:", err);
+        const warmTalkJob = getWarmTalkJob();
+        if (warmTalkJob) {
+          await postWarmTalkJobResult(warmTalkJob, {
+            status: "failed",
+            kind: warmTalkJob.kind || "receive",
+            to: warmTalkJob.to || "",
+            subject: warmTalkJob.subject || "",
+            account_email: warmTalkJob.account_email || "",
+            summary: `WarmTalk task failed: ${err.message}`,
+            error: "automation_error",
+          });
+        }
         const inboxLabJob = getInboxLabJob();
         if (inboxLabJob) {
           await postInboxLabJobResult(inboxLabJob, {
@@ -3221,7 +3419,11 @@ zoho: {
           });
         }
         state = "idle";
-        sendMsg("ERROR", { message: err.message });
+        sendMsg("ERROR", {
+          message: err.message,
+          // Lets background skip the continuous-mode path for WarmTalk runs.
+          warmTalkJobId: warmTalkJob?.id,
+        });
       });
       sendResponse({ ok: true });
       return false;
