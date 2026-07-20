@@ -2375,7 +2375,10 @@ function getWarmTalkSelectedAccounts() {
 }
 
 function extractAccountEmail(account = {}) {
-  const match = `${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`
+  // Also consult the Settings label override, in case the user typed the email
+  // there but the stored discoveredAccounts label is stale.
+  const override = (account.id && accountLabelOverrides[account.id]) || '';
+  const match = `${override} ${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`
     .match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
   return match ? match[0].toLowerCase() : '';
 }
@@ -2384,12 +2387,13 @@ function renderWarmTalkAccounts(accounts = [], selectedIds = []) {
   if (!warmTalkAccountList) return;
 
   const providers = new Set(getCheckedValues(warmTalkProviderGroup));
-  // WarmTalk can only drive accounts we can resolve an address for; anything
-  // else could never be used as a recipient.
-  const usable = accounts
+  // Every discovered account for the chosen providers, with its resolved email.
+  const providerAccounts = accounts
     .filter(account => account?.id && providers.has(getAccountProviderId(account)))
-    .map(account => ({ ...account, email: extractAccountEmail(account) }))
-    .filter(account => account.email);
+    .map(account => ({ ...account, email: extractAccountEmail(account) }));
+
+  // Only accounts with a resolvable address can actually send or receive.
+  const usable = providerAccounts.filter(account => account.email);
 
   warmTalkUsableAccounts = usable;
   populateWarmTalkPairSelects();
@@ -2400,29 +2404,40 @@ function renderWarmTalkAccounts(accounts = [], selectedIds = []) {
 
   warmTalkAccountList.innerHTML = '';
 
-  if (!usable.length) {
+  if (!providerAccounts.length) {
     const empty = document.createElement('div');
     empty.className = 'account-empty';
-    empty.textContent = 'No accounts with a detected email address. Run Deep Scan in Settings.';
+    empty.textContent = 'No accounts for the selected providers. Run Deep Scan in Settings.';
     warmTalkAccountList.appendChild(empty);
     return;
   }
 
   const selected = new Set(selectedIds);
 
-  usable.forEach((account) => {
+  providerAccounts.forEach((account) => {
     const row = document.createElement('label');
     row.className = 'account-option';
 
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = account.id;
-    input.checked = selected.has(account.id);
-    input.addEventListener('change', () => saveWarmTalkSettings({ silent: true }));
 
     const text = document.createElement('span');
     text.className = 'account-label-text';
-    text.textContent = `${getProviderLabel(getAccountProviderId(account))} — ${account.email}`;
+
+    if (account.email) {
+      input.checked = selected.has(account.id);
+      input.addEventListener('change', () => saveWarmTalkSettings({ silent: true }));
+      text.textContent = `${getProviderLabel(getAccountProviderId(account))} — ${account.email}`;
+    } else {
+      // No email detected: keep it visible so nothing silently disappears, but
+      // it can't be enrolled until an email is set in Settings.
+      input.checked = false;
+      input.disabled = true;
+      const shown = account.label || account.detectedLabel || account.id;
+      text.textContent = `${getProviderLabel(getAccountProviderId(account))} — ${shown} (set email in Settings to use)`;
+      text.style.opacity = '0.6';
+    }
 
     row.append(input, text);
     warmTalkAccountList.appendChild(row);
@@ -2583,8 +2598,10 @@ async function loadWarmTalkUi(options = {}) {
   warmTalkSubjectsInput.value = Array.isArray(data.warmTalkSubjectTemplates)
     ? data.warmTalkSubjectTemplates.join('\n')
     : '';
+  // Bodies are multi-line, so they are separated by a line of --- rather than by
+  // newlines. This keeps each template's own paragraph breaks intact.
   warmTalkBodiesInput.value = Array.isArray(data.warmTalkBodyTemplates)
-    ? data.warmTalkBodyTemplates.map(body => String(body).replace(/\n/g, '\\n')).join('\n')
+    ? data.warmTalkBodyTemplates.join('\n---\n')
     : '';
 
   renderWarmTalkAccounts(
@@ -2612,11 +2629,13 @@ async function saveWarmTalkSettings(options = {}) {
     .split('\n')
     .map(line => line.trim())
     .filter(Boolean);
+  // Each body template can span many lines; templates are separated by a line
+  // containing only dashes (---). This is why a full multi-line body is kept as
+  // one template and sent in full, instead of each line becoming its own.
   const bodies = warmTalkBodiesInput.value
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => line.replace(/\\n/g, '\n'));
+    .split(/^\s*-{3,}\s*$/m)
+    .map(block => block.replace(/^\n+|\n+$/g, '').trim())
+    .filter(Boolean);
 
   const minRead = parseNumberInput(warmTalkReadMinInput, 5, 0, 600);
   const maxRead = Math.max(minRead, parseNumberInput(warmTalkReadMaxInput, 20, 0, 600));

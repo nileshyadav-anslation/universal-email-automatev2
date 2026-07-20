@@ -270,7 +270,9 @@ Once that looks right, turn **Dry Run OFF** and Start again to send for real.
 
 | Setting | What it does |
 |---|---|
-| **Subject / Body Templates** | One per line. Use `\n` in a body line for a line break. 10 of each ship by default. A random pick is used each time, and never the same one twice in a row. A unique tracking tag is appended to the subject automatically. |
+| **Subject Templates** | One subject per line. A unique tracking tag is appended automatically. |
+| **Body Templates** | Each body can be several lines. Separate one body from the next with a line containing only `---`. Line breaks and blank lines **inside** a body are kept and sent as-is. Empty uses the 10 built-in bodies. |
+| **Template selection** | 10 subjects and 10 bodies ship by default. Subject and body are each picked at random every time, and never the same one twice in a row. |
 | **Reply Probability** | % of mails that get a reply. Real users don't reply to everything. (Ignored inside a thread — an unanswered thread would just stop.) |
 | **Click Links In Warmup Mail** | Opens safe links inside warmup mail, to simulate engagement. Only useful if your body templates contain links. |
 | **Max Links Per Email** | How many safe links to open. |
@@ -295,7 +297,16 @@ mail from that account.
 - **Accounts don't appear in the WarmTalk list** — WarmTalk only lists accounts whose email address
   it could detect. For Gmail, you can type the correct address into the account label in Settings.
 - **Send fails** — the provider's Compose window may have changed, or you're signed out. The log
-  names the exact step that failed (compose button, To field, subject, body, or send).
+  names the exact step that failed (opening compose, To field, subject, body, or send).
+- **Compose won't open on Yahoo / AOL / Outlook** — these don't have a reliably-labelled "Compose"
+  button, so WarmTalk opens a new message with the **`n` keyboard shortcut**. That shortcut must be
+  enabled in the mailbox:
+  - **Yahoo / AOL**: Settings → keyboard shortcuts must be **on** (they are on by default).
+  - **Outlook**: Settings → General → **Keyboard shortcuts** must be set to the **Outlook** scheme
+    (the default), where `n` starts a new message.
+  - **Gmail** uses its Compose button, and falls back to the `c` shortcut if keyboard shortcuts are
+    enabled.
+  If a provider's shortcut is off, WarmTalk still tries the on-screen button as a backup.
 - **Mail never found by the receiver** — keep subject templates short. A long subject can push the
   tracking tag out of view.
 

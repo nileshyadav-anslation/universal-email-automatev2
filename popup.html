@@ -643,7 +643,7 @@
         <div class="setting-row">
           <div class="setting-info">
             <span class="setting-name">Allow Cross-Provider</span>
-            <span class="setting-desc">Let Gmail talk to Yahoo/AOL/Outlook</span>
+            <span class="setting-desc">Let any selected provider email another (e.g. Yahoo ↔ Outlook). Off = same-provider only.</span>
           </div>
           <div class="setting-control">
             <label class="toggle">
@@ -891,9 +891,9 @@
         <div class="setting-row setting-row-stack">
           <div class="setting-info">
             <span class="setting-name">Body Templates</span>
-            <span class="setting-desc">One per line. Use \n for line breaks. Empty uses defaults.</span>
+            <span class="setting-desc">Separate each template with a line of --- . Line breaks inside a template are kept. Empty uses defaults.</span>
           </div>
-          <textarea id="warmTalkBodiesInput" class="template-textarea" rows="4"></textarea>
+          <textarea id="warmTalkBodiesInput" class="template-textarea" rows="8" placeholder="Hi,&#10;&#10;Just checking in on this.&#10;&#10;Thanks&#10;---&#10;Hello,&#10;&#10;Sharing a quick update.&#10;&#10;Best"></textarea>
         </div>
 
         <div class="setting-row">

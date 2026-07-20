@@ -623,21 +623,47 @@
       return notJunkButton;
     }
 
-    async function clickPossibleConfirmation() {
-      await deps.sleep(700);
-      const dialog = document.querySelector('[role="dialog"], [aria-modal="true"]');
-      if (!dialog) return false;
+    // After "Not junk", Outlook pops a "We won't send messages from X to Junk in
+    // the future" dialog with an OK button. It can appear a second or two late,
+    // so poll for it instead of checking once — otherwise the message is left
+    // stuck behind the modal and the move never completes.
+    async function clickPossibleConfirmation(maxWait = 5000) {
+      const matches = ["ok", "yes", "got it", "report", "move", "not junk", "confirm"];
+      const start = Date.now();
 
-      const matches = ["ok", "yes", "report", "move", "not junk"];
-      const confirmButton = Array.from(dialog.querySelectorAll('button, [role="button"]')).find((button) => {
-        if (!isVisibleEnabledButton(button)) return false;
-        const label = getElementLabel(button);
-        return matches.some((match) => label.includes(match));
-      }) || null;
-      if (!confirmButton) return false;
+      while (Date.now() - start < maxWait) {
+        const dialogs = Array.from(document.querySelectorAll(
+          '[role="dialog"], [aria-modal="true"], [role="alertdialog"]'
+        )).filter(isVisibleElement);
 
-      clickElementLikeUser(confirmButton);
-      return true;
+        for (const dialog of dialogs) {
+          const buttons = Array.from(dialog.querySelectorAll('button, [role="button"], input[type="button"]'));
+          // Prefer an exact "OK"/"Yes" over a substring hit like "OK, got it".
+          const confirmButton =
+            buttons.find((button) => {
+              if (!isVisibleEnabledButton(button)) return false;
+              const label = getElementLabel(button).trim();
+              return label === "ok" || label === "yes" || label === "confirm";
+            }) ||
+            buttons.find((button) => {
+              if (!isVisibleEnabledButton(button)) return false;
+              const label = getElementLabel(button);
+              return matches.some((match) => label.includes(match));
+            }) ||
+            null;
+
+          if (confirmButton) {
+            clickElementLikeUser(confirmButton);
+            await deps.sleep(500);
+            return true;
+          }
+        }
+
+        if (deps.getState() === "stopped") return false;
+        await deps.sleep(300);
+      }
+
+      return false;
     }
 
     function getVisibleTextFromSelectors(selectors = []) {
@@ -667,6 +693,13 @@
       const hadMessageBody = Boolean(getMessageBodyElement());
 
       while (Date.now() - start < maxWait) {
+        // A confirmation dialog can surface late, after clickPossibleConfirmation
+        // has already returned. If one is up, dismiss it here too — otherwise it
+        // blocks the move and this wait would time out.
+        if (document.querySelector('[role="dialog"], [aria-modal="true"], [role="alertdialog"]')) {
+          await clickPossibleConfirmation(1500);
+        }
+
         const noticeText = getVisibleTextFromSelectors([
           '[role="alert"]',
           "[aria-live]",

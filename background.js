@@ -14,7 +14,7 @@ try {
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-07-17-warmtalk-v1';
+const CONTENT_SCRIPT_VERSION = '2026-07-20-warmtalk-compose-dedupe-v6';
 const ACTIVITY_LOG_KEY = 'activityLogEntries'; // legacy single-array key, migrated into chunks
 const ACTIVITY_LOG_META_KEY = 'activityLogMeta';
 const ACTIVITY_LOG_CHUNK_PREFIX = 'activityLogChunk:';

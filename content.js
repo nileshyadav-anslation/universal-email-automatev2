@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-07-17-warmtalk-v1";
+  const CONTENT_SCRIPT_VERSION = "2026-07-20-warmtalk-compose-dedupe-v6";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");

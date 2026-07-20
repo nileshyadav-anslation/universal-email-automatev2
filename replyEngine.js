@@ -217,17 +217,47 @@
       await waitUntilManualActivityQuiet(callbacks);
 
       if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
+        // Plain fields keep newlines natively.
         element.value += chunk;
       } else {
         setCaretToEnd(element);
-        let inserted = false;
-        try {
-          inserted = document.execCommand("insertText", false, chunk);
-        } catch (error) {
-          inserted = false;
-        }
-        if (!inserted) {
-          element.textContent += chunk;
+        // In a rich contenteditable, a literal "\n" collapses to a space, so
+        // real line breaks must be inserted as line breaks. Split the chunk and
+        // emit a line break between segments. (Single-line replies contain no
+        // newlines, so their behaviour is unchanged.)
+        const segments = chunk.split("\n");
+        for (let s = 0; s < segments.length; s++) {
+          if (s > 0) {
+            let broke = false;
+            try {
+              broke = document.execCommand("insertLineBreak");
+            } catch (error) {
+              broke = false;
+            }
+            if (!broke) {
+              try {
+                broke = document.execCommand("insertHTML", false, "<br>");
+              } catch (error) {
+                broke = false;
+              }
+            }
+            if (!broke) {
+              element.appendChild(document.createElement("br"));
+            }
+          }
+
+          const segment = segments[s];
+          if (!segment) continue;
+
+          let inserted = false;
+          try {
+            inserted = document.execCommand("insertText", false, segment);
+          } catch (error) {
+            inserted = false;
+          }
+          if (!inserted) {
+            element.textContent += segment;
+          }
         }
       }
 
