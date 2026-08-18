@@ -5,31 +5,37 @@
 }
 
 :root {
-  --bg: #ffffff;
-  --surface: #f8fafc;
-  --surface-2: #ffffff;
-  --surface-3: #eff6ff;
-  --border: #e2e8f0;
-  --border-hover: #cbd5e1;
-  --text: #0f172a;
-  --text-muted: #64748b;
-  --text-dim: #94a3b8;
+  /* Neutral white + gray theme. Page is a soft gray, cards sit on top in white. */
+  --bg: #f4f4f5;
+  --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #f4f4f5;
+  --border: #e4e4e7;
+  --border-hover: #d4d4d8;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-muted: #71717a;
+  --text-dim: #a1a1aa;
+  /* Blue stays the action colour: play button, checked toggles, focus, links. */
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
-  --accent-soft: #dbeafe;
-  --green: #059669;
-  --green-soft: #d1fae5;
-  --amber: #d97706;
-  --amber-soft: #fef3c7;
-  --red: #dc2626;
-  --red-soft: #fee2e2;
+  --accent-soft: #eff6ff;
+  --accent-ring: rgba(37, 99, 235, 0.14);
+  --brand: #2563eb;
+  --track: #d4d4d8;
+  --green: #15803d;
+  --green-soft: #f0fdf4;
+  --amber: #b45309;
+  --amber-soft: #fffbeb;
+  --red: #b91c1c;
+  --red-soft: #fef2f2;
   --blue: #2563eb;
-  --blue-soft: #dbeafe;
+  --blue-soft: #eff6ff;
   --radius: 14px;
   --radius-sm: 10px;
   --font-body: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-  --shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow: 0 12px 28px rgba(24, 24, 27, 0.08);
+  --shadow-soft: 0 1px 2px rgba(24, 24, 27, 0.05);
 }
 
 html {
@@ -53,6 +59,11 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 .app {
@@ -81,7 +92,7 @@ textarea {
   width: 38px;
   height: 38px;
   border-radius: 12px;
-  background: var(--accent);
+  background: var(--brand);
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -141,7 +152,7 @@ textarea {
 
 .status-pill.running .status-dot {
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 4px var(--accent-ring);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -192,7 +203,7 @@ textarea {
 }
 
 .control-card {
-  background: #ffffff;
+  background: var(--surface);
   box-shadow: var(--shadow);
 }
 
@@ -219,7 +230,7 @@ textarea {
   padding: 9px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--surface);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
@@ -230,7 +241,7 @@ textarea {
 
 .btn:hover:not(:disabled) {
   border-color: var(--border-hover);
-  background: #f8fafc;
+  background: var(--surface-2);
   transform: translateY(-1px);
 }
 
@@ -282,7 +293,7 @@ textarea {
 .stat-item {
   min-width: 0;
   padding: 10px 8px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   text-align: center;
@@ -379,7 +390,7 @@ textarea {
   align-items: center;
   gap: 7px;
   padding: 6px 8px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -391,7 +402,6 @@ textarea {
 .provider-option input {
   width: 13px;
   height: 13px;
-  accent-color: var(--accent);
 }
 
 .provider-legacy-select {
@@ -403,7 +413,7 @@ textarea {
   min-width: 68px;
   padding: 7px 10px;
   cursor: pointer;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -417,7 +427,7 @@ textarea {
 .batch-select:focus,
 .template-textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .template-textarea {
@@ -425,7 +435,7 @@ textarea {
   min-height: 96px;
   resize: vertical;
   padding: 10px 11px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -534,7 +544,7 @@ textarea {
   align-items: center;
   gap: 9px;
   padding: 8px 10px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
@@ -546,7 +556,6 @@ textarea {
 .account-option input {
   width: 14px;
   height: 14px;
-  accent-color: var(--accent);
 }
 
 .account-label-text {
@@ -572,7 +581,7 @@ textarea {
 .account-option .account-label-input:hover,
 .account-option .account-label-input:focus {
   border-color: var(--border-strong);
-  background: #f8fafc;
+  background: var(--surface-2);
   outline: none;
 }
 
@@ -636,7 +645,7 @@ textarea {
   flex-direction: column;
   gap: 8px;
   padding: 10px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: var(--shadow-soft);
@@ -676,7 +685,7 @@ textarea {
   flex-shrink: 0;
   padding: 3px 7px;
   border-radius: 999px;
-  background: #f1f5f9;
+  background: var(--surface-3);
   border: 1px solid var(--border);
   color: var(--text-muted);
   font-size: 10px;
@@ -684,22 +693,22 @@ textarea {
 }
 
 .proxy-status-online {
-  background: #dcfce7;
-  border-color: #86efac;
-  color: #166534;
+  background: var(--green-soft);
+  border-color: #bbf7d0;
+  color: var(--green);
 }
 
 .proxy-status-offline,
 .proxy-status-auth-failed {
-  background: #fee2e2;
+  background: var(--red-soft);
   border-color: #fecaca;
-  color: #991b1b;
+  color: var(--red);
 }
 
 .proxy-status-disabled {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #64748b;
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+  color: var(--text-muted);
 }
 
 .proxy-card-actions .btn {
@@ -724,7 +733,7 @@ textarea {
   -webkit-appearance: none;
   width: 102px;
   height: 5px;
-  background: #e2e8f0;
+  background: var(--border);
   border-radius: 999px;
   outline: none;
   cursor: pointer;
@@ -735,14 +744,14 @@ textarea {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--surface);
   border: 4px solid var(--accent);
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.2);
+  box-shadow: 0 2px 6px rgba(24, 24, 27, 0.18);
 }
 
 .slider::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 5px var(--accent-ring);
 }
 
 .toggle {
@@ -763,11 +772,11 @@ textarea {
   width: 42px;
   height: 24px;
   border-radius: 999px;
-  background: #cbd5e1;
-  border: 1px solid #cbd5e1;
+  background: var(--track);
+  border: 1px solid var(--track);
   position: relative;
   transition: background 0.2s ease, border-color 0.2s ease;
-  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.08);
+  box-shadow: inset 0 1px 2px rgba(24, 24, 27, 0.08);
 }
 
 .toggle-thumb {
@@ -777,8 +786,8 @@ textarea {
   width: 20px;
   height: 20px;
   border-radius: 999px;
-  background: #ffffff;
-  box-shadow: 0 2px 5px rgba(15, 23, 42, 0.2);
+  background: var(--surface);
+  box-shadow: 0 2px 5px rgba(24, 24, 27, 0.18);
   transition: transform 0.2s ease;
 }
 
@@ -889,7 +898,7 @@ textarea {
   flex-direction: column;
   gap: 6px;
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: #d4d4d8 transparent;
 }
 
 .log-scroll::-webkit-scrollbar {
@@ -901,7 +910,7 @@ textarea {
 }
 
 .log-scroll::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--track);
   border-radius: 999px;
 }
 
@@ -918,7 +927,7 @@ textarea {
   align-items: flex-start;
   gap: 8px;
   padding: 7px 9px;
-  background: #ffffff;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
   font-size: 11px;

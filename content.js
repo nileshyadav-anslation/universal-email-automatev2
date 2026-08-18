@@ -2671,6 +2671,30 @@ zoho: {
     return true;
   }
 
+  // Navigates to `folder` and locates the job's row, including the Gmail
+  // search fallback used when paging/scrolling doesn't surface it. Shared by
+  // the normal Inbox Lab flow and the WarmTalk Spam-rescue path so both use
+  // the exact same lookup behaviour.
+  async function locateInboxLabRow(job, folder, tag = "[InboxLab]") {
+    const folderLabel = getInboxLabFolderLabel(folder);
+    const providerLabel = getInboxLabProviderLabel();
+
+    log(`${tag} Opening ${providerLabel} ${folderLabel}`, "info");
+    await navigateToInboxLabMailbox(folder);
+
+    let row = await findInboxLabJobRow(job, 3);
+
+    if (!row && job.subject && isGmailProvider()) {
+      log(`${tag} Job email not visible in ${folderLabel}. Searching Gmail...`, "warn");
+      await navigateToGmailSearchForJob(job, folder);
+      row = await findInboxLabJobRow(job, 2);
+    } else if (!row && job.subject && isScrollableMailboxProvider()) {
+      log(`${tag} Job email not visible in ${folderLabel} after scrolling ${providerLabel}.`, "warn");
+    }
+
+    return row;
+  }
+
   async function runInboxLabProviderJob(job, options = {}) {
     const tag = options.logPrefix || "[InboxLab]";
     const folder = getInboxLabProviderFolder(job);
@@ -2692,18 +2716,8 @@ zoho: {
     if (getInboxLabJobFolder(job) === "promotions" && folder !== "promotions") {
       log(`${tag} ${providerLabel} has no Promotions category. Using Inbox.`, "warn");
     }
-    log(`${tag} Opening ${providerLabel} ${folderLabel}`, "info");
-    await navigateToInboxLabMailbox(folder);
 
-    let row = await findInboxLabJobRow(job, 3);
-
-    if (!row && job.subject && isGmailProvider()) {
-      log(`${tag} Job email not visible in ${folderLabel}. Searching Gmail...`, "warn");
-      await navigateToGmailSearchForJob(job, folder);
-      row = await findInboxLabJobRow(job, 2);
-    } else if (!row && job.subject && isScrollableMailboxProvider()) {
-      log(`${tag} Job email not visible in ${folderLabel} after scrolling ${providerLabel}.`, "warn");
-    }
+    const row = await locateInboxLabRow(job, folder, tag);
 
     if (!row) {
       return {
@@ -2878,7 +2892,31 @@ zoho: {
     }
   }
 
+  // Opens the WarmTalk mail directly in Spam and clicks "Not spam" before any
+  // reading/reply happens, so a reply is never sent while the mail is still
+  // sitting in Spam. Returns { rescued, reason, subject }.
+  async function rescueSpamEmailForJob(job, tag) {
+    const row = await locateInboxLabRow(job, "spam", tag);
+    if (!row) return { rescued: false, reason: "not_found" };
+
+    const rowId = getEmailIdentity(row) || `inboxlab:${job.id}`;
+    const subject = getEmailSubject(row);
+
+    const opened = await openEmailWithRetry(row, subject, rowId, "Spam");
+    if (!opened) return { rescued: false, reason: "open_failed", subject };
+
+    const mailboxProvider = getMailboxProvider();
+    if (!mailboxProvider?.moveOpenedSpamEmailToInbox) {
+      return { rescued: false, reason: "unsupported", subject };
+    }
+
+    log(`${tag} Warmup mail landed in Spam. Marking Not spam before replying...`, "warn");
+    const moved = await mailboxProvider.moveOpenedSpamEmailToInbox(rowId);
+    return { rescued: Boolean(moved), reason: moved ? "" : "move_failed", subject };
+  }
+
   async function runWarmTalkReceiveJob(job) {
+    const tag = "[WarmTalk]";
     const providerLabel = getProviderDisplayLabel();
     // Warmup mail can land in Inbox, Spam, or (Gmail) Promotions. Try each
     // before declaring it missing.
@@ -2886,34 +2924,62 @@ zoho: {
     let lastResult = null;
 
     for (const folder of folders) {
+      if (folder === "spam" && job.markNotSpam !== false) {
+        // Rescue first: move the mail out of Spam before it is ever opened for
+        // reading/replying, so the reply always comes from Inbox, not Spam.
+        const rescue = await rescueSpamEmailForJob(job, tag);
+
+        if (rescue.rescued) {
+          const result = await runInboxLabProviderJob(
+            { ...job, folder: "inbox" },
+            { logPrefix: tag, readDelayMs: job.readDelayMs }
+          );
+          lastResult = { ...result, folder: "spam" };
+
+          if (result.status === "completed" || result.error !== "not_found") {
+            return { ...result, kind: "receive", foundIn: "spam" };
+          }
+
+          // Moved successfully but the row didn't show up in Inbox in time —
+          // try the next folder (or report not found) rather than looping back
+          // into Spam, since the mail is no longer there.
+          if (state === "stopped") break;
+          continue;
+        }
+
+        if (rescue.reason === "not_found") {
+          lastResult = {
+            status: "failed",
+            folder: "spam",
+            subject: job.subject || "",
+            account_email: job.account_email || "",
+            summary: "Email not found in Spam.",
+            error: "not_found",
+          };
+          if (state === "stopped") break;
+          continue;
+        }
+
+        // Couldn't confirm the move (button missing, click failed, or no
+        // provider support for it) — fall back to replying from Spam rather
+        // than losing this conversation turn entirely.
+        log(`${tag} Could not move Spam email to Inbox before replying. Continuing from Spam.`, "warn");
+      }
+
       const result = await runInboxLabProviderJob(
         { ...job, folder },
-        { logPrefix: "[WarmTalk]", readDelayMs: job.readDelayMs }
+        { logPrefix: tag, readDelayMs: job.readDelayMs }
       );
       lastResult = result;
 
-      if (result.status === "completed") {
-        // Rescuing warmup mail out of Spam is the whole point of warming, so do
-        // it whenever we found it there — unless the user turned it off.
-        if (folder === "spam" && job.markNotSpam !== false) {
-          const mailboxProvider = getMailboxProvider();
-          if (mailboxProvider?.moveOpenedSpamEmailToInbox) {
-            log("[WarmTalk] Warmup mail landed in Spam. Marking Not spam...", "warn");
-            await mailboxProvider.moveOpenedSpamEmailToInbox();
-          }
-        }
-
-        return { ...result, kind: "receive", foundIn: folder };
-      }
-
-      if (result.error !== "not_found") {
+      if (result.status === "completed" || result.error !== "not_found") {
         return { ...result, kind: "receive", foundIn: folder };
       }
 
       if (state === "stopped") break;
     }
 
-    log(`[WarmTalk] Warmup mail not found in any ${providerLabel} folder.`, "warn");
+    log(`${tag} Warmup mail not found in any ${providerLabel} folder.`, "warn");
     return {
       ...(lastResult || {}),
       kind: "receive",
