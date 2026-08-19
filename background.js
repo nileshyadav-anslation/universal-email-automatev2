@@ -14,7 +14,7 @@ try {
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-08-19-gmail-visible-range-v13';
+const CONTENT_SCRIPT_VERSION = '2026-08-19-gmail-skip-ads-v14';
 const ACTIVITY_LOG_KEY = 'activityLogEntries'; // legacy single-array key, migrated into chunks
 const ACTIVITY_LOG_META_KEY = 'activityLogMeta';
 const ACTIVITY_LOG_CHUNK_PREFIX = 'activityLogChunk:';

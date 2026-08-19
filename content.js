@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-08-19-gmail-visible-range-v13";
+  const CONTENT_SCRIPT_VERSION = "2026-08-19-gmail-skip-ads-v14";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");
@@ -2370,8 +2370,35 @@ zoho: {
     }
   }
 
+  // Gmail renders sponsored rows inside the message list, and they carry the
+  // unread class, so they land in getUnreadRows() and the automation tries to
+  // open them. They are not threads and cannot open, so each one burns all three
+  // retries plus a mailbox navigation. Every real row measured live carries
+  // data-legacy-thread-id, so its absence is the reliable marker — the visible
+  // "Ad"/"Sponsored" text is localised and would break outside English.
+  function isGmailAdRow(row) {
+    if (!row) return false;
+
+    const hasThreadId =
+      row.getAttribute("data-legacy-thread-id") ||
+      row.getAttribute("data-thread-id") ||
+      row.querySelector("[data-legacy-thread-id], [data-thread-id]");
+
+    return !hasThreadId;
+  }
+
   function getFilteredUnreadRows(mailboxLabel = "") {
     let unreadRows = getUnreadRows();
+
+    if (isGmailProvider()) {
+      const beforeAdFilter = unreadRows.length;
+      unreadRows = unreadRows.filter((row) => !isGmailAdRow(row));
+      const skippedAds = beforeAdFilter - unreadRows.length;
+
+      if (skippedAds > 0) {
+        log(`Skipped ${skippedAds} sponsored ad row(s).`, "info");
+      }
+    }
 
     const mailboxProvider = getMailboxProvider();
     if (
