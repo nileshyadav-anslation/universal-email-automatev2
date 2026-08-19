@@ -14,7 +14,7 @@ try {
 
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
-const CONTENT_SCRIPT_VERSION = '2026-07-20-warmtalk-compose-dedupe-v6';
+const CONTENT_SCRIPT_VERSION = '2026-08-19-gmail-visible-range-v13';
 const ACTIVITY_LOG_KEY = 'activityLogEntries'; // legacy single-array key, migrated into chunks
 const ACTIVITY_LOG_META_KEY = 'activityLogMeta';
 const ACTIVITY_LOG_CHUNK_PREFIX = 'activityLogChunk:';
@@ -62,8 +62,8 @@ const DEFAULT_AUTOMATION_SETTINGS = {
   retryEmailOpening: true,
   manualActivityPause: true,
   processGmailPromotions: true,
-  gmailPromotionsPageLimit: 1,
-  gmailInboxPageLimit: 3,
+  gmailPromotionsPageLimit: 2,
+  gmailInboxPageLimit: 2,
   maxEmails: 10,
   maxLinksPerEmail: 1,
   enableLinkOpening: true,
@@ -4061,8 +4061,8 @@ chrome.runtime.onInstalled.addListener(details => {
       retryEmailOpening: true,
       manualActivityPause: true,
       processGmailPromotions: true,
-      gmailPromotionsPageLimit: 1,
-      gmailInboxPageLimit: 3,
+      gmailPromotionsPageLimit: 2,
+      gmailInboxPageLimit: 2,
       maxEmails: 10,
       maxLinksPerEmail: 1,
       enableLinkOpening: true,

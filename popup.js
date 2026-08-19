@@ -98,8 +98,8 @@ const DEFAULT_SETTINGS = {
   retryEmailOpening: true,
   manualActivityPause: true,
   processGmailPromotions: true,
-  gmailPromotionsPageLimit: 1,
-  gmailInboxPageLimit: 3,
+  gmailPromotionsPageLimit: 2,
+  gmailInboxPageLimit: 2,
   maxEmails: 20,
   maxLinksPerEmail: 1,
   enableLinkOpening: true,
@@ -582,7 +582,7 @@ function validateGmailPromotionsPageLimit(value) {
   const parsed = parseInt(value, 10);
 
   if (!Number.isFinite(parsed) || parsed < 1) {
-    return 1;
+    return DEFAULT_SETTINGS.gmailPromotionsPageLimit;
   }
 
   if (parsed > 10) {

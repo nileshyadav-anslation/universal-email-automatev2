@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const CONTENT_SCRIPT_VERSION = "2026-07-20-warmtalk-compose-dedupe-v6";
+  const CONTENT_SCRIPT_VERSION = "2026-08-19-gmail-visible-range-v13";
 
   if (window.__emailReadAutomateContentLoaded) {
     console.info("[EmailReadAutomate] Duplicate content script ignored");
@@ -371,7 +371,8 @@ zoho: {
     retryEmailOpening: true,
     manualActivityPause: true,
     processGmailPromotions: true,
-    gmailPromotionsPageLimit: 1,
+    gmailPromotionsPageLimit: 2,
+    gmailInboxPageLimit: 2,
     maxEmails: 20,
     maxLinksPerEmail: 1,
     enableLinkOpening: true,
@@ -2093,11 +2094,19 @@ zoho: {
   }
 
   function getGmailPageRangeText() {
-    const rangeEl =
-      document.querySelector('.Di .Dj') ||
-      document.querySelector('[aria-label="Show more messages"] .Dj') ||
-      document.querySelector('[role="button"][aria-label="Show more messages"]');
+    // Gmail keeps the previous mailbox's DOM mounted after an in-page switch, so
+    // a plain querySelector returns the OLD view's counter: hidden, 0x0, and
+    // frozen at the previous mailbox's total. Reading that made every successful
+    // page turn look like "the range did not change", which aborted pagination on
+    // the very first attempt. Measured live on Gmail: after Promotions -> Inbox
+    // there are three .Di .Dj nodes and only the second one is visible.
+    const candidates = [
+      ...document.querySelectorAll('.Di .Dj'),
+      ...document.querySelectorAll('[aria-label="Show more messages"] .Dj'),
+      ...document.querySelectorAll('[role="button"][aria-label="Show more messages"]'),
+    ];
 
+    const rangeEl = candidates.find((element) => element && element.offsetParent !== null);
     return rangeEl ? rangeEl.textContent.replace(/\s+/g, ' ').trim() : '';
   }
 
@@ -3055,11 +3064,11 @@ zoho: {
       const MAX_CYCLES = 5;
       const GMAIL_PROMOTIONS_MAX_PAGES = Math.min(
         10,
-        Math.max(1, parseInt(settings.gmailPromotionsPageLimit, 10) || 1)
+        Math.max(1, parseInt(settings.gmailPromotionsPageLimit, 10) || 2)
       );
       const GMAIL_INBOX_MAX_PAGES = Math.min(
         15,
-        Math.max(1, parseInt(settings.gmailInboxPageLimit, 10) || 3)
+        Math.max(1, parseInt(settings.gmailInboxPageLimit, 10) || 2)
       );
       // Per-mailbox Gmail page cap (0 = unlimited, e.g. Spam).
       let gmailPageLimit = 0;
@@ -3088,6 +3097,14 @@ zoho: {
 
       while (state === "running" && cycle < MAX_CYCLES) {
         cycle++;
+        // MAX_CYCLES is the "nothing left to do" guard. Every place that restores
+        // it sits behind either isScrollableMailboxProvider() (yahoo/aol/outlook
+        // only) or a successful page turn, so on Gmail a pass that actually opened
+        // mail still burned budget — and a mailbox was abandoned after 5 passes,
+        // silently, long before reaching its configured page limit. Give the budget
+        // back only when mail was genuinely opened, so the guard still stops a
+        // mailbox that is truly idle.
+        const openedAtPassStart = emailsOpened;
 
         let unreadRows = getFilteredUnreadRows(mailboxLabel);
         sendMsg("UNREAD_COUNT", { count: unreadRows.length });
@@ -3351,7 +3368,14 @@ zoho: {
 
         if (state !== "running") break;
         if (accountLimitReached) break;
+        if (emailsOpened > openedAtPassStart) cycle = 0;
         await sleep(1000);
+      }
+
+      // This exit used to be completely silent, which is why the run looked like
+      // it jumped to the next mailbox for no reason.
+      if (state === "running" && !accountLimitReached && cycle >= MAX_CYCLES) {
+        log(`Stopped scanning ${mailboxLabel} after ${MAX_CYCLES} passes with no new emails.`, "warn");
       }
     }
 
