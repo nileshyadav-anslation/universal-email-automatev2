@@ -2409,6 +2409,63 @@ async function startContinuousAutomationCycle() {
   }
 }
 
+// Injected into the opened link tab. executeScript serialises this function, so
+// it must be fully self-contained — it cannot close over anything out here.
+function humanScrollPage(budgetMs) {
+  try {
+    const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+    const pickScroller = () => {
+      const doc = document.scrollingElement || document.documentElement;
+      if (doc && doc.scrollHeight > doc.clientHeight + 40) return doc;
+
+      // Plenty of sites scroll an inner container rather than the document, in
+      // which case scrolling the document does nothing at all.
+      let best = null;
+      let bestArea = 0;
+
+      for (const element of document.querySelectorAll('div, main, section, article')) {
+        if (element.scrollHeight <= element.clientHeight + 40) continue;
+        const rect = element.getBoundingClientRect();
+        const area = rect.width * rect.height;
+        if (area > bestArea) {
+          best = element;
+          bestArea = area;
+        }
+      }
+
+      return best || doc;
+    };
+
+    const scroller = pickScroller();
+    if (!scroller) return;
+
+    const started = Date.now();
+    const maxSteps = 14;
+    let steps = 0;
+
+    const step = () => {
+      if (steps >= maxSteps || Date.now() - started > budgetMs) return;
+
+      const viewport = scroller.clientHeight || window.innerHeight || 600;
+      // Mostly downward, with the occasional short scroll back up.
+      const goingUp = Math.random() < 0.18;
+      const distance = goingUp
+        ? -rand(Math.round(viewport * 0.15), Math.round(viewport * 0.4))
+        : rand(Math.round(viewport * 0.3), Math.round(viewport * 0.85));
+
+      scroller.scrollBy({ top: distance, left: 0, behavior: 'smooth' });
+      steps += 1;
+      setTimeout(step, rand(600, 2200));
+    };
+
+    // A real visitor looks at the top of the page before scrolling.
+    setTimeout(step, rand(800, 2000));
+  } catch (error) {
+    // A scroll problem must never affect the visit itself.
+  }
+}
+
 async function openSafeLinkWorkflow(url, originalTabId, windowId) {
   let linkTab = null;
 
@@ -2421,7 +2478,20 @@ async function openSafeLinkWorkflow(url, originalTabId, windowId) {
     });
 
     await waitForTabComplete(linkTab.id);
-    await delay(randomInt(8000, 20000));
+
+    const dwellMs = randomInt(8000, 20000);
+
+    // Scroll the landing page while it sits open, so the visit does not look
+    // like a page that was fetched and abandoned. Injection can legitimately
+    // fail (PDF viewer, a page that blocks it, a tab that already navigated
+    // away), and none of that should affect the link visit, so swallow it.
+    await chrome.scripting.executeScript({
+      target: { tabId: linkTab.id },
+      func: humanScrollPage,
+      args: [Math.max(0, dwellMs - 1500)]
+    }).catch(() => null);
+
+    await delay(dwellMs);
 
     await chrome.tabs.remove(linkTab.id);
     linkTab = null;
