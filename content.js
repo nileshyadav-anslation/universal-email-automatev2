@@ -1929,10 +1929,17 @@ zoho: {
    * Wait for page to navigate to an email view.
    */
   async function waitForEmailOpen(maxWait = 8000) {
-    const start = Date.now();
-
     // ✅ Small initial delay so the click can register before we start checking
     await sleep(400);
+
+    // The budget starts AFTER that sleep. It used to start before it, and Chrome
+    // throttles timers in a hidden tab (screen locked, window minimised) to about
+    // one wake-up a minute — so that single sleep could burn the whole 8s budget
+    // and the loop below then checked zero selectors. The message had in fact
+    // opened and Gmail had already marked it read, but this reported "open
+    // failed", the retries hit a row no longer in the unread list, and the mail
+    // was skipped for good: no links, no reply, never seen again.
+    const start = Date.now();
 
     while (Date.now() - start < maxWait) {
       if (isAolMessageUrl()) {
@@ -1966,10 +1973,30 @@ zoho: {
   }
 
   // Pause handling
+  const MAX_PAUSE_MS = 20 * 60 * 1000;
+
   async function waitIfPaused() {
+    const pausedAt = Date.now();
+
     while (state === "paused") {
+      // A RESUME that never arrives — popup closed, the provider deselected, the
+      // message simply dropped — used to leave this spinning forever. 'paused'
+      // counts as busy, so it also gated the Inbox Lab worker, WarmTalk and every
+      // future continuous cycle indefinitely. Unwind through the STOP path that
+      // every caller already handles, and report it so continuous mode reschedules.
+      if (Date.now() - pausedAt > MAX_PAUSE_MS) {
+        log(
+          `Paused for over ${Math.round(MAX_PAUSE_MS / 60000)} minutes with no resume. Ending this run.`,
+          "warn"
+        );
+        state = "stopped";
+        sendMsg("ERROR", { message: "Paused too long without a resume" });
+        break;
+      }
+
       await sleep(500);
     }
+
     return state !== "stopped";
   }
 

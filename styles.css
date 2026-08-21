@@ -156,6 +156,18 @@ input[type="radio"] {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
+/* Nothing is running, but continuous mode will start a cycle shortly. Distinct
+   from Idle (no dot accent) and from Running (which pulses). */
+.status-pill.scheduled {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.status-pill.scheduled .status-dot {
+  background: var(--accent);
+}
+
 .status-pill.paused {
   background: var(--amber-soft);
   border-color: #fde68a;

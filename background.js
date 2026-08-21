@@ -28,6 +28,12 @@ const DEFAULT_CONTINUOUS_DELAY_MINUTES = 10;
 const MIN_CONTINUOUS_DELAY_MINUTES = 1;
 const MAX_CONTINUOUS_DELAY_MINUTES = 240;
 const MAX_CONTINUOUS_START_FAILURES = 3;
+// Ceiling for the failure backoff. The loop is never disarmed, only slowed, so
+// this bounds how long a recovered connection waits before the run resumes.
+const MAX_CONTINUOUS_RETRY_DELAY_MINUTES = 30;
+// While a run is in flight there is no scheduled next cycle, so this watchdog is
+// armed instead. Comfortably longer than a healthy cycle so it never races one.
+const CONTINUOUS_WATCHDOG_MIN_MINUTES = 15;
 const DEFAULT_BACKEND_BASE_URL = 'http://10.5.56.133:3000/api/anslation/product-api/knproducts/kncampaignastra/knemailastra/inbox-lab';
 const DEFAULT_BACKEND_CONNECTOR_ID = 'inbox-connector-mrdbbh2d-0pnehvxo';
 const DEFAULT_BACKEND_TOKEN = 'inboxlab_5tsdxevkmrdbbh2ekjemcy';
@@ -534,9 +540,42 @@ async function handleAutomationStartFailure(error, selectedProviders = []) {
   if (selectedProviders.length === 1) {
     await postActiveInboxLabJobFailure(error, selectedProviders[0]);
   }
-  await stopContinuousMode().catch(() => {});
+
   await setAutomationState('idle').catch(() => {});
   await clearProxyForStop();
+
+  // This used to call stopContinuousMode(), which clears the alarm outright — so
+  // a single bad moment (no network, Gmail not loaded yet, mail tab missing)
+  // ended an unattended run permanently, and nothing restarted it once the cause
+  // cleared. Re-arm instead: the cycle retries, and the run resumes by itself.
+  await rearmContinuousAfterFailure(`start failed: ${error?.message || error}`).catch(() => {});
+}
+
+// Re-arms the continuous loop after a failed cycle. Deliberately never disarms:
+// the whole point of continuous mode is that it survives transient breakage —
+// a dropped connection, a mail tab that was not ready — and picks up again on
+// its own. If the user has continuous mode switched off, scheduleContinuousAutomation
+// no-ops, so this is safe to call from any failure path.
+async function rearmContinuousAfterFailure(reason = 'cycle failed') {
+  const data = await getStorage([
+    'settings',
+    'enableContinuousMode',
+    'continuousDelayMinutes',
+    'continuousModeActive',
+    'continuousFailureCount'
+  ]);
+  const settings = getStoredContinuousRunSettings(data);
+
+  if (!isContinuousModeEnabled(settings)) return;
+
+  const failureCount = (parseInt(data.continuousFailureCount, 10) || 0) + 1;
+  await chrome.storage.local.set({ continuousFailureCount: failureCount }).catch(() => {});
+
+  await scheduleContinuousAutomation(settings, reason);
+  await logContinuousEvent(
+    `[Continuous] ${reason}. Failure ${failureCount}; the loop stays armed and will try again.`,
+    'warn'
+  );
 }
 
 async function startAutomationEntryPoint(settings = {}) {
@@ -653,7 +692,15 @@ async function pollBackendWorker() {
 
     await flushPendingInboxLabResults();
 
-    if (isAutomationBusyFromStorage(gate) || await isAutomationSessionActive()) {
+    // The gate below short-circuits on storage, so a stale busy flag would never
+    // reach isAutomationSessionActive()'s reclaim. Clear dead state first, then
+    // re-read.
+    const reclaimed = await reclaimDeadAutomationState();
+    const busyGate = reclaimed
+      ? await getStorage(['automationState', 'providerAutomationStates'])
+      : gate;
+
+    if (isAutomationBusyFromStorage(busyGate) || await isAutomationSessionActive()) {
       return;
     }
 
@@ -1303,13 +1350,48 @@ async function createContinuousAlarm(delayMinutes) {
     throw new Error('Chrome alarms API is not available. Reload the extension after updating manifest permissions.');
   }
 
+  // periodInMinutes is the backstop. The alarm used to be one-shot and was only
+  // re-armed by a DONE/ERROR terminal message, so a single cycle that ended
+  // without one killed continuous mode permanently. Repeating means the next
+  // firing still happens; startContinuousAutomationCycle already reschedules
+  // when a previous cycle is genuinely still running, and stopContinuousMode
+  // still clears the alarm outright.
   const result = chrome.alarms.create(CONTINUOUS_ALARM_NAME, {
-    delayInMinutes: delayMinutes
+    delayInMinutes: delayMinutes,
+    periodInMinutes: delayMinutes
   });
 
   if (result && typeof result.then === 'function') {
     await result;
   }
+}
+
+// Mirrors ensureBackendWorkerAlarm and ensureWarmTalkAlarm, which is why those
+// two survive a browser or extension restart and continuous mode did not: Chrome
+// drops an extension's alarms on update/reload, and nothing re-created this one.
+async function ensureContinuousAlarm() {
+  if (!chrome.alarms?.get) return;
+
+  const data = await getStorage([
+    'settings',
+    'continuousModeActive',
+    'enableContinuousMode',
+    'continuousDelayMinutes'
+  ]);
+
+  // Gate on continuousModeActive, never on enableContinuousMode: stopContinuousMode()
+  // clears only the former, so the latter stays true after a deliberate Stop and
+  // would resurrect a loop the user meant to end.
+  if (data.continuousModeActive !== true) return;
+
+  const settings = getStoredContinuousRunSettings(data);
+  if (!isContinuousModeEnabled(settings)) return;
+
+  const existing = await chrome.alarms.get(CONTINUOUS_ALARM_NAME).catch(() => null);
+  if (existing) return;
+
+  await createContinuousAlarm(getContinuousDelayMinutes(settings));
+  await logContinuousEvent('[Continuous] Loop re-armed after an extension or browser restart.', 'info');
 }
 
 async function setContinuousModeActive(settings = {}) {
@@ -1326,7 +1408,14 @@ async function setContinuousModeActive(settings = {}) {
   const runSettings = getContinuousRunSettings(settings);
   const delayMinutes = getContinuousDelayMinutes(runSettings);
 
-  await clearContinuousAlarm();
+  // This used to clear the alarm and create nothing, betting the whole loop on
+  // this one run delivering DONE/ERROR. A run that never reported — tab on an
+  // error page, extension reloaded, machine slept — left continuous mode with no
+  // timer at all and nothing to notice. Arm a watchdog instead; a healthy cycle
+  // reschedules normally long before it fires, and if it does fire
+  // startContinuousAutomationCycle's existing "previous cycle still active" check
+  // simply reschedules.
+  await createContinuousAlarm(Math.max(delayMinutes, CONTINUOUS_WATCHDOG_MIN_MINUTES));
   await chrome.storage.local.set({
     enableContinuousMode: true,
     continuousDelayMinutes: delayMinutes,
@@ -1339,7 +1428,7 @@ async function setContinuousModeActive(settings = {}) {
     }
   });
 
-  await logContinuousEvent('[Continuous] Enabled. Next cycle will be scheduled after this run finishes.', 'info');
+  await logContinuousEvent('[Continuous] Enabled. Next cycle is scheduled when this run finishes; a watchdog covers a run that never reports.', 'info');
 }
 
 async function stopContinuousMode() {
@@ -1350,14 +1439,20 @@ async function stopContinuousMode() {
   });
 }
 
-async function scheduleContinuousAutomation(settings = {}, reason = 'cycle completed') {
+async function scheduleContinuousAutomation(settings = {}, reason = 'cycle completed', delayOverrideMinutes = 0) {
   if (!isContinuousModeEnabled(settings)) {
     await stopContinuousMode();
     return;
   }
 
   const runSettings = getContinuousRunSettings(settings);
-  const delayMinutes = getContinuousDelayMinutes(runSettings);
+  // The override is only used by the failure backoff; it must not be written back
+  // as the user's configured delay, so continuousDelayMinutes below stays the
+  // configured value and only the alarm uses the longer gap.
+  const configuredDelay = getContinuousDelayMinutes(runSettings);
+  const delayMinutes = delayOverrideMinutes > 0
+    ? Math.min(Math.max(delayOverrideMinutes, MIN_CONTINUOUS_DELAY_MINUTES), MAX_CONTINUOUS_DELAY_MINUTES)
+    : configuredDelay;
   const nextRunAt = Date.now() + delayMinutes * 60 * 1000;
 
   try {
@@ -1369,13 +1464,13 @@ async function scheduleContinuousAutomation(settings = {}, reason = 'cycle compl
 
   await chrome.storage.local.set({
     enableContinuousMode: true,
-    continuousDelayMinutes: delayMinutes,
+    continuousDelayMinutes: configuredDelay,
     continuousModeActive: true,
     continuousNextRunAt: nextRunAt,
     continuousLastReason: reason,
     settings: {
       ...runSettings,
-      continuousDelayMinutes: delayMinutes
+      continuousDelayMinutes: configuredDelay
     }
   });
 
@@ -1560,6 +1655,84 @@ async function getLiveAutomationStates() {
   return states.filter(Boolean);
 }
 
+// Nothing moves automationState off 'running' except a content-script DONE or
+// ERROR, and that message never arrives if the mail tab is closed, navigated
+// away, or discarded by Chrome. The state then gates the Inbox Lab worker and
+// WarmTalk forever.
+//
+// Reclaim strictly on tab liveness, never on whether the content script answers:
+// there are legitimate windows mid-run (proxy reload, account switch, a full
+// Gmail reload) where it cannot answer, and clearing state there would let a
+// second automation start in the same inbox — duplicate opens and replies, which
+// is worse than the stall being fixed.
+// onInstalled (install/update/reload) and onStartup both mean no previously
+// tracked run can still be alive: the content script that would have reported
+// DONE is gone with the old extension load or the old browser session. Without
+// this, reloading the extension mid-run left automationState pinned to 'running'
+// with a tab that still looks alive, which reclaimDeadAutomationState()
+// deliberately will not touch.
+async function releaseOrphanedAutomationState() {
+  const data = await getStorage(['automationState', 'providerAutomationStates']);
+  if (!isAutomationBusyFromStorage(data)) return;
+
+  await chrome.storage.local.set({
+    automationState: 'idle',
+    providerAutomationStates: {}
+  });
+  await addActivityLogEntry(
+    'Released automation state left over from the previous extension session.',
+    'warn'
+  ).catch(() => {});
+}
+
+async function reclaimDeadAutomationState() {
+  const data = await getStorage([
+    'automationState',
+    'providerAutomationStates',
+    'activeProviderTabs'
+  ]);
+
+  if (!isAutomationBusyFromStorage(data)) return false;
+
+  const states = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
+    ? data.providerAutomationStates
+    : {};
+  const tabs = data.activeProviderTabs && typeof data.activeProviderTabs === 'object'
+    ? data.activeProviderTabs
+    : {};
+
+  const runningProviders = Object.keys(states)
+    .filter(provider => states[provider] === 'running' || states[provider] === 'paused');
+
+  // No provider recorded: leave it to isAutomationSessionActive(), which asks the
+  // tabs directly.
+  if (!runningProviders.length) return false;
+
+  for (const provider of runningProviders) {
+    const tabId = tabs[provider];
+    // Tab id unknown — do not guess that the run is dead.
+    if (!tabId) return false;
+
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    // A discarded tab keeps its entry and URL in the tab strip, so without the
+    // discarded check Chrome Memory Saver unloading the mail tab read as a live
+    // run. Chrome only reports discarded:true once the renderer is gone, so there
+    // is provably no content script to protect and this cannot cause a duplicate.
+    if (tab && tab.url && isProviderUrl(tab.url, provider) && !tab.discarded) return false;
+  }
+
+  await chrome.storage.local.set({
+    automationState: 'idle',
+    providerAutomationStates: {}
+  });
+  await addActivityLogEntry(
+    'Released stuck automation state: the mail tab for the running provider is gone.',
+    'warn'
+  ).catch(() => {});
+
+  return true;
+}
+
 async function isAutomationSessionActive() {
   const data = await getStorage(['automationState']);
   const liveStates = await getLiveAutomationStates();
@@ -1574,7 +1747,10 @@ async function isAutomationSessionActive() {
   }
 
   if (data.automationState === 'running' || data.automationState === 'paused') {
-    await setAutomationState('idle');
+    // Clearing automationState alone was not enough: isAutomationBusyFromStorage
+    // also reads providerAutomationStates, so a stale {gmail:'running'} kept both
+    // schedulers gated even after this had reclaimed.
+    await setAutomationState('idle', { providerAutomationStates: {} });
   }
 
   return false;
@@ -2361,6 +2537,7 @@ async function startContinuousAutomationCycle() {
     return;
   }
 
+  await reclaimDeadAutomationState();
   const liveSessionActive = await isAutomationSessionActive();
   const stateData = await getStorage(['automationState']);
   if (liveSessionActive || stateData.automationState === 'running' || stateData.automationState === 'paused') {
@@ -2390,22 +2567,24 @@ async function startContinuousAutomationCycle() {
     await setAutomationState('idle').catch(() => {});
     await clearProxyForStop();
 
-    if (failureCount >= MAX_CONTINUOUS_START_FAILURES) {
-      await chrome.storage.local.set({ continuousFailureCount: failureCount });
-      await stopContinuousMode();
-      await logContinuousEvent(
-        `[Continuous] Start failed ${failureCount} time(s): ${error.message}. Continuous mode paused.`,
-        'error'
-      );
-      return;
-    }
-
     await chrome.storage.local.set({ continuousFailureCount: failureCount });
+
+    // Repeated failures back the retry off so a genuinely broken setup is not
+    // hammered every few minutes, but the loop is never disarmed: an outage that
+    // lasts longer than MAX_CONTINUOUS_START_FAILURES cycles used to end the run
+    // for good, with nothing to restart it after the connection returned.
+    const baseDelay = getContinuousDelayMinutes(settings);
+    const backoffSteps = Math.min(Math.max(0, failureCount - MAX_CONTINUOUS_START_FAILURES + 1), 4);
+    const retryDelay = Math.min(
+      baseDelay * Math.pow(2, Math.max(0, backoffSteps)),
+      MAX_CONTINUOUS_RETRY_DELAY_MINUTES
+    );
+
     await logContinuousEvent(
-      `[Continuous] Start failed ${failureCount} time(s): ${error.message}. Retrying after delay.`,
+      `[Continuous] Start failed ${failureCount} time(s): ${error.message}. Retrying in ~${retryDelay} minute(s).`,
       'error'
     );
-    await scheduleContinuousAutomation(settings, 'start failed');
+    await scheduleContinuousAutomation(settings, 'start failed', retryDelay);
   }
 }
 
@@ -2546,18 +2725,35 @@ async function injectAutomationScripts(tabId) {
   });
 }
 
-async function ensureAutomationScripts(tabId) {
+async function pingAutomationScript(tabId) {
   const ping = await chrome.tabs.sendMessage(tabId, { action: 'PING' }).catch(() => null);
-  if (ping && ping.ok && ping.version === CONTENT_SCRIPT_VERSION) return;
+  return ping && ping.ok ? ping : null;
+}
 
-  if (ping && ping.ok && ping.version !== CONTENT_SCRIPT_VERSION) {
-    await chrome.tabs.reload(tabId);
-    await waitForTabComplete(tabId, 60000);
-    await delay(2500);
+async function ensureAutomationScripts(tabId) {
+  let ping = await pingAutomationScript(tabId);
+  if (ping && ping.version === CONTENT_SCRIPT_VERSION) return;
 
-    const freshPing = await chrome.tabs.sendMessage(tabId, { action: 'PING' }).catch(() => null);
-    if (freshPing && freshPing.ok && freshPing.version === CONTENT_SCRIPT_VERSION) return;
+  // No answer at all. Give a slow page one more chance before doing anything
+  // heavier — on a slow machine the script may simply not have run yet.
+  if (!ping) {
+    await delay(1500);
+    ping = await pingAutomationScript(tabId);
+    if (ping && ping.version === CONTENT_SCRIPT_VERSION) return;
   }
+
+  // Reload for a version mismatch, and also for a still-silent tab. A silent tab
+  // is usually one holding an orphaned script from a previous extension load:
+  // it cannot answer, yet window.__emailReadAutomateContentLoaded is still set,
+  // so a fresh injection would bail out at the duplicate guard and leave the tab
+  // with no live script while this function reported success. Only a reload
+  // clears that flag. A tab that genuinely has no script is unharmed by it.
+  await chrome.tabs.reload(tabId);
+  await waitForTabComplete(tabId, 60000);
+  await delay(2500);
+
+  const freshPing = await pingAutomationScript(tabId);
+  if (freshPing && freshPing.version === CONTENT_SCRIPT_VERSION) return;
 
   await injectAutomationScripts(tabId);
 }
@@ -3615,8 +3811,15 @@ async function tickWarmTalk() {
       return;
     }
 
-    // Never fight the Inbox Lab worker or a manual run for the same tab.
-    if (isAutomationBusyFromStorage(gate) || await isAutomationSessionActive()) return;
+    // Never fight the Inbox Lab worker or a manual run for the same tab. Clear
+    // dead state first: the storage check short-circuits, so a run whose tab is
+    // gone would otherwise gate WarmTalk forever.
+    const reclaimedForWarmTalk = await reclaimDeadAutomationState();
+    const warmTalkGate = reclaimedForWarmTalk
+      ? await getStorage(['automationState', 'providerAutomationStates'])
+      : gate;
+
+    if (isAutomationBusyFromStorage(warmTalkGate) || await isAutomationSessionActive()) return;
 
     const activeWindow = isWithinWarmTalkWindow(settings);
     if (!activeWindow.ok) {
@@ -3864,11 +4067,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // The popup reads automationState straight from storage, so a run whose tab
+  // was closed would keep it showing "Running" until some scheduler happened to
+  // run the reclaim. Let the popup ask for it directly on open.
+  if (message.action === 'RECONCILE_AUTOMATION_STATE') {
+    reclaimDeadAutomationState()
+      .then(reclaimed => sendResponse({ ok: true, reclaimed }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (message.action === 'START_AUTOMATION') {
     const settings = getContinuousRunSettings(message.settings || {});
     const selectedProviders = getSelectedProvidersFromSettings(settings);
 
-    startAutomationEntryPoint(settings)
+    reclaimDeadAutomationState()
+      .catch(() => false)
+      .then(() => startAutomationEntryPoint(settings))
       .then(sendResponse)
       .catch(async error => {
         await handleAutomationStartFailure(error, selectedProviders);
@@ -4182,6 +4398,12 @@ chrome.runtime.onInstalled.addListener(details => {
     // Open Gmail on first install
     chrome.tabs.create({ url: 'https://mail.google.com' });
   } else {
+    releaseOrphanedAutomationState().catch(error => {
+      console.warn('[State] Orphan release failed', error);
+    });
+    ensureContinuousAlarm().catch(error => {
+      console.warn('[Continuous] Alarm re-arm failed', error);
+    });
     migrateStoredBackendConnectorDefaults().catch(error => {
       console.warn('[Backend] Connector default migration failed', error);
     });
@@ -4195,6 +4417,12 @@ chrome.runtime.onInstalled.addListener(details => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  releaseOrphanedAutomationState().catch(error => {
+    console.warn('[State] Orphan release failed', error);
+  });
+  ensureContinuousAlarm().catch(error => {
+    console.warn('[Continuous] Alarm re-arm failed', error);
+  });
   migrateStoredBackendConnectorDefaults().catch(error => {
     console.warn('[Backend] Connector default migration failed', error);
   });

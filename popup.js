@@ -486,13 +486,33 @@ async function exportActivityLogs() {
   }
 }
 
+// Reads whether a continuous cycle is armed and shows the honest state. Every
+// place that used to hardcode setStatus('idle', 'Idle') after a run ends should
+// call this instead, otherwise the pill claims nothing is happening while the
+// loop is about to fire again.
+function applyIdleStatus() {
+  chrome.storage.local.get(['continuousModeActive', 'continuousNextRunAt'], (data) => {
+    if (!data.continuousModeActive) {
+      setStatus('idle', 'Idle');
+      return;
+    }
+
+    const nextRunAt = Number(data.continuousNextRunAt) || 0;
+    const minutes = nextRunAt ? Math.max(0, Math.round((nextRunAt - Date.now()) / 60000)) : 0;
+    setStatus('scheduled', minutes > 0 ? `Next in ${minutes}m` : 'Scheduled');
+  });
+}
+
 function setStatus(state, label) {
   currentState = state;
   statusLabel.textContent = label;
   statusPill.className = 'status-pill ' + state;
 
   btnStart.disabled  = (state === 'running');
-  btnPause.disabled  = (state === 'idle' || state === 'stopped');
+  btnPause.disabled  = (state === 'idle' || state === 'stopped' || state === 'scheduled');
+  // 'scheduled' means nothing is running but continuous mode will start a cycle
+  // shortly. Stop has to stay reachable there — it is the only way to cancel the
+  // loop, and it used to be greyed out because the pill just said "Idle".
   btnStop.disabled   = (state === 'idle' || state === 'stopped');
 
   btnStart.classList.toggle('active', state === 'running');
@@ -517,9 +537,14 @@ const RESUME_ICON_HTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="
 
 // Restore the real automation state when the popup (re)opens, so Stop/Pause
 // stay usable while automation is still running in the background.
-function restoreAutomationState() {
+async function restoreAutomationState() {
+  // Ask the background to drop state left behind by a run whose tab is gone,
+  // otherwise the pill below would show "Running" for an automation that ended
+  // when its mail tab was closed.
+  await sendRuntimeMessage({ action: 'RECONCILE_AUTOMATION_STATE' }).catch(() => null);
+
   return new Promise((resolve) => {
-    chrome.storage.local.get(['automationState', 'providerAutomationStates', 'automationStartedAt'], (data) => {
+    chrome.storage.local.get(['automationState', 'providerAutomationStates', 'automationStartedAt', 'continuousModeActive', 'continuousNextRunAt'], (data) => {
       const providerStates = data.providerAutomationStates && typeof data.providerAutomationStates === 'object'
         ? data.providerAutomationStates
         : {};
@@ -527,6 +552,10 @@ function restoreAutomationState() {
 
       let state = data.automationState || 'idle';
       if (anyActive && state !== 'paused') state = 'running';
+
+      if (state !== 'running' && state !== 'paused' && data.continuousModeActive) {
+        state = 'scheduled';
+      }
 
       if (state === 'running' || state === 'paused') {
         if (Number.isFinite(data.automationStartedAt)) {
@@ -536,7 +565,7 @@ function restoreAutomationState() {
         setStatus(state, state === 'paused' ? 'Paused' : 'Running');
         btnPause.innerHTML = state === 'paused' ? RESUME_ICON_HTML : PAUSE_ICON_HTML;
       } else {
-        setStatus('idle', 'Idle');
+        applyIdleStatus();
       }
 
       resolve(state);
@@ -2131,7 +2160,7 @@ btnStart.addEventListener('click', async () => {
   const settings = getCurrentSettings();
 
   if (settings.selectedProviders.length > 1 && settings.enableProxyManager && settings.proxyApplyMode === 'perAccount') {
-    setStatus('idle', 'Idle');
+    applyIdleStatus();
     log('Parallel multi-provider automation with per-account proxies is not supported in one Chrome profile. Use Same Proxy for All Tabs or run providers sequentially.', 'error');
     return;
   }
@@ -2151,7 +2180,7 @@ btnStart.addEventListener('click', async () => {
   chrome.runtime.sendMessage({ action: 'START_AUTOMATION', settings }, response => {
     if (chrome.runtime.lastError || !response || !response.ok) {
       const message = chrome.runtime.lastError?.message || response?.error || 'Unknown error';
-      setStatus('idle', 'Idle');
+      applyIdleStatus();
       log(`Start failed: ${message}`, 'error');
       return;
     }
@@ -2194,7 +2223,7 @@ btnStop.addEventListener('click', async () => {
   sendRuntimeMessage({ action: 'CLEAR_PROXY' }).catch(() => null);
   // Re-enable start after stopping
   setTimeout(() => {
-    setStatus('idle', 'Idle');
+    applyIdleStatus();
   }, 2000);
 });
 
@@ -2207,7 +2236,7 @@ function handleProviderTerminalMessage(msg, terminalState) {
     const isMultiProviderRun = provider && Object.keys(states).length > 1;
 
     if (!isMultiProviderRun) {
-      setStatus('idle', 'Idle');
+      applyIdleStatus();
       chrome.storage.local.set({ automationState: 'idle' });
       btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
       return;
@@ -2221,7 +2250,7 @@ function handleProviderTerminalMessage(msg, terminalState) {
     });
 
     if (!stillActive) {
-      setStatus('idle', 'Idle');
+      applyIdleStatus();
       btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
       log('All selected provider automations finished', 'success', { persist: false });
     }
@@ -2809,7 +2838,16 @@ if (warmTalkEnabledToggle) {
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local' || !warmTalkStatusEl) return;
+  if (areaName !== 'local') return;
+
+  // The cycle is scheduled by the background a moment after the run reports done,
+  // so without this the pill can settle on "Idle" just before the schedule lands.
+  if ((changes.continuousModeActive || changes.continuousNextRunAt) &&
+      (currentState === 'idle' || currentState === 'scheduled')) {
+    applyIdleStatus();
+  }
+
+  if (!warmTalkStatusEl) return;
 
   if (changes.warmTalkStatus || changes.warmTalkLastError) {
     getStorage(['warmTalkStatus', 'warmTalkLastError']).then(data => {
@@ -2831,6 +2869,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const restoredState = await restoreAutomationState();
   if (restoredState === 'running' || restoredState === 'paused') {
     log('Automation is still running. Use Stop to end it.', 'info', { persist: false });
+  } else if (restoredState === 'scheduled') {
+    log('Continuous mode is on. The next cycle is scheduled — use Stop to cancel it.', 'info', { persist: false });
   } else {
     log('Extension ready. Choose a provider and click Start.', 'info', { persist: false });
   }
