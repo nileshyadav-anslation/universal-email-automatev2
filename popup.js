@@ -2860,12 +2860,65 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
+function updateAccordionBadges() {
+  const accountBadge = $('accountSwitchingBadge');
+  if (accountBadge && enableAccountSwitchingToggle) {
+    accountBadge.textContent = enableAccountSwitchingToggle.checked ? 'ON' : 'OFF';
+    accountBadge.classList.toggle('on', enableAccountSwitchingToggle.checked);
+  }
+
+  const proxyBadge = $('proxyManagerBadge');
+  if (proxyBadge && proxyManagerToggle) {
+    proxyBadge.textContent = proxyManagerToggle.checked ? 'ON' : 'OFF';
+    proxyBadge.classList.toggle('on', proxyManagerToggle.checked);
+  }
+
+  const warmTalkBadge = $('warmTalkBadge');
+  if (warmTalkBadge && warmTalkEnabledToggle) {
+    warmTalkBadge.textContent = warmTalkEnabledToggle.checked ? 'ON' : 'OFF';
+    warmTalkBadge.classList.toggle('on', warmTalkEnabledToggle.checked);
+  }
+}
+
+function initAccordions() {
+  document.querySelectorAll('.accordion-header').forEach(header => {
+    header.addEventListener('click', (e) => {
+      if (e.target.closest('input') || e.target.closest('select') || e.target.closest('button:not(.accordion-header)')) {
+        return;
+      }
+      const item = header.closest('.accordion-item');
+      const content = item ? item.querySelector('.accordion-content') : null;
+      if (!content) return;
+      const isExpanded = header.getAttribute('aria-expanded') === 'true';
+
+      header.setAttribute('aria-expanded', !isExpanded);
+      if (isExpanded) {
+        item.classList.remove('open');
+        content.hidden = true;
+      } else {
+        item.classList.add('open');
+        content.hidden = false;
+      }
+    });
+  });
+
+  [enableAccountSwitchingToggle, proxyManagerToggle, warmTalkEnabledToggle].forEach(toggle => {
+    if (toggle) {
+      toggle.addEventListener('change', updateAccordionBadges);
+    }
+  });
+
+  updateAccordionBadges();
+}
+
 //  Init
 document.addEventListener('DOMContentLoaded', async () => {
+  initAccordions();
   loadActivityLogs();
   loadSettings();
   loadWarmTalkUi();
   await checkGmailAndShowAlert();
+  updateAccordionBadges();
   const restoredState = await restoreAutomationState();
   if (restoredState === 'running' || restoredState === 'paused') {
     log('Automation is still running. Use Stop to end it.', 'info', { persist: false });
@@ -2875,3 +2928,4 @@ document.addEventListener('DOMContentLoaded', async () => {
     log('Extension ready. Choose a provider and click Start.', 'info', { persist: false });
   }
 });
+

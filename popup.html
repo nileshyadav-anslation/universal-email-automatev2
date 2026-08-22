@@ -13,7 +13,7 @@
     <header class="header">
       <div class="logo-wrap">
         <div class="logo-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 8L10.89 13.26C11.2187 13.4793 11.6049 13.5963 12 13.5963C12.3951 13.5963 12.7813 13.4793 13.11 13.26L21 8M5 19H19C19.5304 19 20.0391 18.7893 20.4142 18.4142C20.7893 18.0391 21 17.5304 21 17V7C21 6.46957 20.7893 5.96086 20.4142 5.58579C20.0391 5.21071 19.5304 5 19 5H5C4.46957 5 3.96086 5.21071 3.58579 5.58579C3.21071 5.96086 3 6.46957 3 7V17C3 17.5304 3.21071 18.0391 3.58579 18.4142C3.96086 18.7893 4.46957 19 5 19Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </div>
@@ -34,26 +34,26 @@
       Open Gmail, Yahoo, AOL, Outlook, Proton, or Zoho Mail to use the extension
     </div>
 
-    <!-- Main Control Card -->
+    <!-- Main Control Card (Always Visible) -->
     <div class="card control-card">
       <div class="card-label">Automation Control</div>
       <div class="btn-group">
         <button class="btn btn-start" id="btnStart">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
           Start
         </button>
         <button class="btn btn-pause" id="btnPause" disabled>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
           Pause
         </button>
         <button class="btn btn-stop" id="btnStop" disabled>
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
           Stop
         </button>
       </div>
     </div>
 
-    <!-- Stats Card -->
+    <!-- Stats Card (Always Visible) -->
     <div class="card stats-card">
       <div class="card-label">Session Stats</div>
       <div class="stats-grid">
@@ -72,903 +72,1060 @@
       </div>
     </div>
 
-    <!-- Settings Card -->
-    <div class="card settings-card">
-      <div class="card-label">Settings</div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Mail Provider</span>
-          <span class="setting-desc">Choose one or more mailboxes to automate</span>
-        </div>
-        <div class="setting-control">
-          <div class="provider-checkbox-group" id="providerCheckboxGroup">
-            <label class="provider-option">
-              <input type="checkbox" name="selectedProvider" value="gmail" checked />
-              <span>Gmail</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" name="selectedProvider" value="yahoo" />
-              <span>Yahoo</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" name="selectedProvider" value="aol" />
-              <span>AOL</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" name="selectedProvider" value="outlook" />
-              <span>Outlook</span>
-            </label>
-          </div>
-          <select id="providerSelect" class="batch-select provider-legacy-select" aria-label="Primary provider">
-            <option value="gmail">Gmail</option>
-            <option value="yahoo">Yahoo</option>
-            <option value="aol">AOL</option>
-            <option value="outlook">Outlook</option>
-            <!-- <option value="proton">Proton</option> -->
-            <!-- <option value="zoho">Zoho</option> -->
-          </select>
-        </div>
+    <!-- Mail Providers Card (Always Visible) -->
+    <div class="card providers-card">
+      <div class="card-label">Mail Providers</div>
+      <div class="provider-checkbox-group" id="providerCheckboxGroup">
+        <label class="provider-option">
+          <input type="checkbox" name="selectedProvider" value="gmail" checked />
+          <span>Gmail</span>
+        </label>
+        <label class="provider-option">
+          <input type="checkbox" name="selectedProvider" value="yahoo" />
+          <span>Yahoo</span>
+        </label>
+        <label class="provider-option">
+          <input type="checkbox" name="selectedProvider" value="aol" />
+          <span>AOL</span>
+        </label>
+        <label class="provider-option">
+          <input type="checkbox" name="selectedProvider" value="outlook" />
+          <span>Outlook</span>
+        </label>
       </div>
-
-      <div class="setting-row setting-row-stack">
-        <div class="setting-info">
-          <span class="setting-name">Backend Connector</span>
-          <span class="setting-desc">Connect this extension to Inbox Lab</span>
-        </div>
-        <div class="backend-connector-grid">
-          <input
-            type="text"
-            id="backendBaseUrlInput"
-            class="batch-select backend-base-url"
-            placeholder="Server/Base URL"
-          />
-          <input
-            type="text"
-            id="backendConnectorIdInput"
-            class="batch-select"
-            placeholder="Connector ID"
-          />
-          <input
-            type="password"
-            id="backendTokenInput"
-            class="batch-select"
-            placeholder="Token"
-          />
-          <input
-            type="email"
-            id="backendAccountInput"
-            class="batch-select backend-account"
-            placeholder="Account"
-          />
-        </div>
-        <div class="backend-connector-actions">
-          <button class="btn settings-action" id="btnTestBackendConnection">Connect/Test</button>
-          <span class="connector-status" id="backendConnectionStatus">Not tested</span>
-        </div>
-        <div class="backend-connector-actions backend-worker-row">
-          <span class="connector-label">Worker</span>
-          <span class="connector-status" id="backendWorkerStatus">Disconnected</span>
-        </div>
-      </div>
-
-      <div class="setting-row setting-row-stack automation-template-card">
-        <div class="setting-info">
-          <span class="setting-name">Automation Templates</span>
-          <span class="setting-desc">Save and reuse workflows like Open Only, Open + Links, or Reply mode</span>
-        </div>
-        <div class="template-controls">
-          <select id="automationTemplateSelect" class="batch-select template-select">
-            <option value="">Choose template</option>
-          </select>
-          <button class="btn settings-action" id="btnApplyAutomationTemplate" disabled>Apply</button>
-        </div>
-        <div class="template-controls">
-          <input
-            type="text"
-            id="automationTemplateNameInput"
-            class="batch-select template-name-input"
-            maxlength="50"
-            placeholder="Template name"
-          />
-          <button class="btn settings-action" id="btnSaveAutomationTemplate">Save Current</button>
-          <button class="btn settings-action danger" id="btnDeleteAutomationTemplate" disabled>Delete</button>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Reading Time</span>
-          <span class="setting-desc">Time spent on each email</span>
-        </div>
-        <div class="setting-control">
-          <span class="val-badge" id="readTimeVal">4s</span>
-          <input type="range" class="slider" id="readTimeSlider" min="1" max="15" value="4" />
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Next Email Delay</span>
-          <span class="setting-desc">Pause before next email</span>
-        </div>
-        <div class="setting-control">
-          <span class="val-badge" id="backDelayVal">2s</span>
-          <input type="range" class="slider" id="backDelaySlider" min="1" max="10" value="2" />
-        </div>
-      </div>
-       <!-- Total Emails Limit -->
-   <div class="setting-row">
-
-  <div class="setting-info">
-    <span class="setting-name">Total Emails Limit</span>
-    <span class="setting-desc">Maximum emails to process</span>
-  </div>
-
-  <div class="setting-control">
-    <input
-      type="number"
-      id="maxEmailsInput"
-      min="1"
-      max="200"
-      value="20"
-      class="batch-select"
-    />
-  </div>
-
-</div>
-       <!-- user choose emails to read -->
-        <!-- <div class="setting-row">
-        
-  <div class="setting-info">
-    <span class="setting-name">Emails Per Cycle</span>
-    <span class="setting-desc">How many unread emails to open</span>
-  </div>
-
-  <div class="setting-control">
-    <select id="batchSizeSelect" class="batch-select">
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
-      <option value="5">5</option>
-      <option value="10">10</option>
-    </select>
-  </div>
-</div>  -->
- 
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Auto Refresh</span>
-          <span class="setting-desc">Refresh inbox between runs</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="autoRefreshToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Continuous Mode</span>
-          <span class="setting-desc">Start the next cycle after a delay</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="continuousModeToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Loop Delay</span>
-          <span class="setting-desc">Minutes before the next cycle</span>
-        </div>
-        <div class="setting-control">
-          <input
-            type="number"
-            id="continuousDelayMinutesInput"
-            min="1"
-            max="240"
-            value="10"
-            class="batch-select"
-          />
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Random Email Opening</span>
-          <span class="setting-desc">Open unread emails in random order</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="randomEmailOpeningToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Retry Failed Opens</span>
-          <span class="setting-desc">Retry email opening up to 3 times</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="retryEmailOpeningToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Manual Activity Pause</span>
-          <span class="setting-desc">Pause briefly when user clicks or types</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="manualActivityPauseToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Gmail Promotions</span>
-          <span class="setting-desc">Process Gmail Promotions during automation</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="gmailPromotionsToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Promotions Pages</span>
-          <span class="setting-desc">Maximum Gmail Promotions pages per account</span>
-        </div>
-        <div class="setting-control">
-          <input type="number" id="gmailPromotionsPageLimitInput" class="number-input compact-number" min="1" max="10" value="2" />
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Inbox Pages</span>
-          <span class="setting-desc">Maximum Gmail Inbox pages per account</span>
-        </div>
-        <div class="setting-control">
-          <input type="number" id="gmailInboxPageLimitInput" class="number-input compact-number" min="1" max="15" value="2" />
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Enable Account Switching</span>
-          <span class="setting-desc">Process selected logged-in accounts one at a time</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="enableAccountSwitchingToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row setting-row-stack" id="accountSelectionRow" style="display:none;">
-        <div class="setting-info">
-          <span class="setting-name">Accounts</span>
-          <span class="setting-desc">Only checked accounts participate</span>
-        </div>
-        <div class="account-list" id="accountList">
-          <div class="account-empty">Enable switching and open a supported inbox.</div>
-        </div>
-        <div class="account-actions">
-          <button class="btn settings-action" id="btnSelectAllAccounts">Select All</button>
-          <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
-          <button class="btn settings-action" id="btnDeepScanGmail">Deep Scan Gmail</button>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Enable Proxy Manager</span>
-          <span class="setting-desc">Apply assigned proxy before each account scan</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="proxyManagerToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Proxy Fallback</span>
-          <span class="setting-desc">Allow automation without proxy if assigned proxy fails</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="proxyFallbackToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Proxy Apply Mode</span>
-          <span class="setting-desc">Choose how proxy is applied during automation</span>
-        </div>
-        <div class="setting-control">
-          <select id="proxyApplyModeSelect" class="batch-select">
-            <option value="off">Off</option>
-            <option value="global">Same Proxy for All Tabs</option>
-            <option value="perAccount">Per-Account Proxy</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="setting-row" id="globalProxyRow" style="display:none;">
-        <div class="setting-info">
-          <span class="setting-name">Global Proxy</span>
-          <span class="setting-desc">Used by all provider tabs in Same Proxy mode</span>
-        </div>
-        <div class="setting-control">
-          <select id="globalProxySelect" class="batch-select">
-            <option value="">Select proxy</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="setting-row setting-row-stack proxy-manager-row">
-        <div class="setting-info">
-          <span class="setting-name">Proxy List</span>
-          <span class="setting-desc">Assign up to 3 proxies to one selected account</span>
-        </div>
-        <div class="proxy-form-grid">
-          <input type="text" id="proxyHostInput" class="batch-select" placeholder="Host" />
-          <input type="number" id="proxyPortInput" class="batch-select" placeholder="Port" min="1" max="65535" />
-          <input type="text" id="proxyUsernameInput" class="batch-select" placeholder="Username" />
-          <input type="password" id="proxyPasswordInput" class="batch-select" placeholder="Password" />
-          <input type="text" id="proxyCountryInput" class="batch-select" placeholder="Country" />
-          <input type="text" id="proxyCityInput" class="batch-select" placeholder="City" />
-          <select id="proxyTypeSelect" class="batch-select">
-            <option value="http">HTTP</option>
-            <option value="https">HTTPS</option>
-            <option value="socks5">SOCKS5</option>
-            <option value="socks4">SOCKS4</option>
-            <option value="residential">Residential</option>
-            <option value="datacenter">Datacenter</option>
-          </select>
-          <select id="proxyAssignedToSelect" class="batch-select">
-            <option value="">Assign account</option>
-          </select>
-        </div>
-        <button class="btn settings-action" id="btnAddProxy">Add Proxy</button>
-        <div class="proxy-list" id="proxyList">
-          <div class="account-empty">No proxies added yet.</div>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Enable Link Opening</span>
-          <span class="setting-desc">Open safe links found in emails</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="enableLinkOpeningToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Max Links Per Email</span>
-          <span class="setting-desc">Safe links to open before replying</span>
-        </div>
-        <div class="setting-control">
-          <input
-            type="number"
-            id="maxLinksPerEmailInput"
-            min="1"
-            max="3"
-            value="1"
-            class="batch-select"
-          />
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Enable Auto Reply</span>
-          <span class="setting-desc">Send a template reply after processing</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="enableAutoReplyToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Processed Tracking</span>
-          <span class="setting-desc">Skip emails already processed</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="enableProcessedTrackingToggle" checked />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Reprocessing Mode</span>
-          <span class="setting-desc">Control processed unread emails</span>
-        </div>
-        <div class="setting-control">
-          <select id="reprocessingModeSelect" class="batch-select">
-            <option value="never">Never Reprocess</option>
-            <option value="unread">Reprocess If Marked Unread</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="setting-row setting-row-stack">
-        <div class="setting-info">
-          <span class="setting-name">Reply Templates</span>
-          <span class="setting-desc">One template per line. Empty uses defaults.</span>
-        </div>
-        <textarea id="replyTemplatesInput" class="template-textarea" rows="5"></textarea>
-        <button class="btn settings-action" id="btnSaveTemplates">Save Templates</button>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Processed History</span>
-          <span class="setting-desc">Clear records and in-memory caches</span>
-        </div>
-        <div class="setting-control">
-          <button class="btn settings-action danger" id="btnClearProcessedHistory">Clear Processed History</button>
-        </div>
-      </div>
+      <!-- Legacy select required by JS fallback -->
+      <select id="providerSelect" class="provider-legacy-select" aria-label="Primary provider">
+        <option value="gmail">Gmail</option>
+        <option value="yahoo">Yahoo</option>
+        <option value="aol">AOL</option>
+        <option value="outlook">Outlook</option>
+      </select>
     </div>
 
-    <!-- WarmTalk -->
-    <div class="card settings-card">
-      <div class="card-label">WarmTalk</div>
+    <!-- ACCORDION SECTION CONTAINER -->
+    <div class="accordion-group">
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Enable WarmTalk</span>
-          <span class="setting-desc">Enrolled accounts email each other like real users</span>
-        </div>
-        <div class="setting-control">
-          <label class="toggle">
-            <input type="checkbox" id="warmTalkEnabledToggle" />
-            <span class="toggle-track">
-              <span class="toggle-thumb"></span>
-            </span>
-          </label>
+      <!-- 1. Customize Accordion -->
+      <div class="accordion-item" id="accCustomizeItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accCustomizeContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-customize">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Customize</span>
+              <span class="accordion-subtitle">Automation &amp; email behavior</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accCustomizeContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+
+            <!-- Sub-section A: Timing -->
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                Automation Timing
+              </div>
+              
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Reading Time</span>
+                  <span class="setting-desc">Time spent on each email</span>
+                </div>
+                <div class="setting-control">
+                  <span class="val-badge" id="readTimeVal">4s</span>
+                  <input type="range" class="slider" id="readTimeSlider" min="1" max="15" value="4" />
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Next Email Delay</span>
+                  <span class="setting-desc">Pause before next email</span>
+                </div>
+                <div class="setting-control">
+                  <span class="val-badge" id="backDelayVal">2s</span>
+                  <input type="range" class="slider" id="backDelaySlider" min="1" max="10" value="2" />
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Total Emails Limit</span>
+                  <span class="setting-desc">Maximum emails to process</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="maxEmailsInput" min="1" max="200" value="20" class="batch-select compact-number" />
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Auto Refresh</span>
+                  <span class="setting-desc">Refresh inbox between runs</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="autoRefreshToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Continuous Mode</span>
+                  <span class="setting-desc">Start next cycle after delay</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="continuousModeToggle" />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Loop Delay</span>
+                  <span class="setting-desc">Minutes before next cycle</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="continuousDelayMinutesInput" min="1" max="240" value="10" class="batch-select compact-number" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Sub-section B: Processing -->
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                Email Processing
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Random Email Opening</span>
+                  <span class="setting-desc">Open unread emails in random order</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="randomEmailOpeningToggle" />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Retry Failed Opens</span>
+                  <span class="setting-desc">Retry email opening up to 3 times</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="retryEmailOpeningToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Manual Activity Pause</span>
+                  <span class="setting-desc">Pause briefly when user clicks/types</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="manualActivityPauseToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Gmail Promotions</span>
+                  <span class="setting-desc">Process Gmail Promotions tab</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="gmailPromotionsToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Promotions Pages</span>
+                  <span class="setting-desc">Max Promotions pages per account</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="gmailPromotionsPageLimitInput" class="number-input compact-number" min="1" max="10" value="2" />
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Inbox Pages</span>
+                  <span class="setting-desc">Max Gmail Inbox pages per account</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="gmailInboxPageLimitInput" class="number-input compact-number" min="1" max="15" value="2" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Sub-section C: Links & Reply -->
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                Links &amp; Auto Reply
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Enable Link Opening</span>
+                  <span class="setting-desc">Open safe links found in emails</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="enableLinkOpeningToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Max Links Per Email</span>
+                  <span class="setting-desc">Safe links to open before replying</span>
+                </div>
+                <div class="setting-control">
+                  <input type="number" id="maxLinksPerEmailInput" min="1" max="3" value="1" class="batch-select compact-number" />
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Enable Auto Reply</span>
+                  <span class="setting-desc">Send template reply after reading</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="enableAutoReplyToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Processed Tracking</span>
+                  <span class="setting-desc">Skip emails already processed</span>
+                </div>
+                <div class="setting-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="enableProcessedTrackingToggle" checked />
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Reprocessing Mode</span>
+                  <span class="setting-desc">Control processed unread emails</span>
+                </div>
+                <div class="setting-control">
+                  <select id="reprocessingModeSelect" class="batch-select">
+                    <option value="never">Never Reprocess</option>
+                    <option value="unread">Reprocess If Marked Unread</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sub-section D: History -->
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                History &amp; Cache
+              </div>
+              <div class="setting-row">
+                <div class="setting-info">
+                  <span class="setting-name">Processed History</span>
+                  <span class="setting-desc">Clear records and in-memory caches</span>
+                </div>
+                <div class="setting-control">
+                  <button class="btn settings-action danger" id="btnClearProcessedHistory">Clear Processed History</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
         </div>
       </div>
 
-      <div id="warmTalkBody" style="display:none;">
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Status</span>
-            <span class="setting-desc">Live WarmTalk state</span>
+      <!-- 2. Backend Connector Accordion -->
+      <div class="accordion-item" id="accBackendItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accBackendContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-backend">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Backend Connector</span>
+              <span class="accordion-subtitle">Connect this extension to Inbox Lab</span>
+            </div>
           </div>
-          <div class="setting-control">
-            <span class="connector-status" id="warmTalkStatus">Stopped</span>
+          <div class="accordion-header-right">
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
           </div>
-        </div>
+        </button>
 
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Dry Run (no real emails)</span>
-            <span class="setting-desc">Compose and discard. Turn OFF to actually send.</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkDryRunToggle" checked />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Providers</span>
-            <span class="setting-desc">Only these providers take part</span>
-          </div>
-          <div class="provider-checkbox-group" id="warmTalkProviderGroup">
-            <label class="provider-option">
-              <input type="checkbox" value="gmail" checked /> <span>Gmail</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" value="yahoo" /> <span>Yahoo</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" value="aol" /> <span>AOL</span>
-            </label>
-            <label class="provider-option">
-              <input type="checkbox" value="outlook" /> <span>Outlook</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Allow Cross-Provider</span>
-            <span class="setting-desc">Let any selected provider email another (e.g. Yahoo ↔ Outlook). Off = same-provider only.</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkCrossProviderToggle" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Enrolled Accounts</span>
-            <span class="setting-desc">Need at least 2. Only these can send or receive.</span>
-          </div>
-          <div class="account-list" id="warmTalkAccountList">
-            <div class="account-empty">Run Deep Scan in Settings to detect accounts.</div>
-          </div>
-          <div class="account-actions">
-            <button class="btn settings-action" id="btnWarmTalkSelectAll">Select All</button>
-            <button class="btn settings-action" id="btnWarmTalkRefreshAccounts">Refresh Accounts</button>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Pairing Strategy</span>
-            <span class="setting-desc">How sender/receiver are chosen</span>
-          </div>
-          <div class="setting-control">
-            <select id="warmTalkPairingSelect" class="batch-select">
-              <option value="roundRobin">Round Robin</option>
-              <option value="random">Random</option>
-              <option value="mesh">Mesh (all-to-all)</option>
-              <option value="manual">Manual Pairs</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack" id="warmTalkManualPairsRow" style="display:none;">
-          <div class="setting-info">
-            <span class="setting-name">Manual Pairs</span>
-            <span class="setting-desc">Define exactly who emails whom</span>
-          </div>
-          <div class="setting-control">
-            <select id="warmTalkPairFromSelect" class="batch-select"></select>
-            <select id="warmTalkPairToSelect" class="batch-select"></select>
-            <button class="btn settings-action" id="btnWarmTalkAddPair">Add Pair</button>
-          </div>
-          <div class="account-list" id="warmTalkPairList">
-            <div class="account-empty">No manual pairs yet.</div>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Threaded Conversation</span>
-            <span class="setting-desc">Keep replying back and forth (A→B→A→B)</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkThreadToggle" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row" id="warmTalkThreadTurnsRow" style="display:none;">
-          <div class="setting-info">
-            <span class="setting-name">Thread Turns</span>
-            <span class="setting-desc">How many replies to volley per conversation</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkThreadTurnsInput" class="number-input compact-number" min="1" max="10" value="2" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Gap Between Conversations</span>
-            <span class="setting-desc">Random minutes between each conversation</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkMinCycleInput" class="number-input compact-number" min="1" max="240" value="5" />
-            <input type="number" id="warmTalkMaxCycleInput" class="number-input compact-number" min="1" max="240" value="15" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Reply Delay (seconds)</span>
-            <span class="setting-desc">Random wait before receiver opens the mail</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkReplyMinInput" class="number-input compact-number" min="5" max="3600" value="45" />
-            <input type="number" id="warmTalkReplyMaxInput" class="number-input compact-number" min="5" max="3600" value="180" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Daily Cap Per Account</span>
-            <span class="setting-desc">Max sends per account per day (0 = no cap)</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkDailyCapInput" class="number-input compact-number" min="0" max="200" value="10" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Weekly Cap Per Account</span>
-            <span class="setting-desc">Max sends per account per week (0 = no cap)</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkWeeklyCapInput" class="number-input compact-number" min="0" max="1000" value="40" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Ramp-Up</span>
-            <span class="setting-desc">Start low and build up to the daily cap (for cold accounts)</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkRampUpToggle" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row" id="warmTalkRampUpRow" style="display:none;">
-          <div class="setting-info">
-            <span class="setting-name">Ramp-Up Curve</span>
-            <span class="setting-desc">Start/day, then days to reach the daily cap</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkRampUpStartInput" class="number-input compact-number" min="1" max="100" value="2" />
-            <input type="number" id="warmTalkRampUpDaysInput" class="number-input compact-number" min="1" max="60" value="7" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Read Time (seconds)</span>
-            <span class="setting-desc">Random pause between opening and replying</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkReadMinInput" class="number-input compact-number" min="0" max="600" value="5" />
-            <input type="number" id="warmTalkReadMaxInput" class="number-input compact-number" min="0" max="600" value="20" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Click Links In Warmup Mail</span>
-            <span class="setting-desc">Simulate engagement if your templates contain links</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkLinkOpeningToggle" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row" id="warmTalkMaxLinksRow" style="display:none;">
-          <div class="setting-info">
-            <span class="setting-name">Max Links Per Email</span>
-            <span class="setting-desc">How many safe links to open</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkMaxLinksInput" class="number-input compact-number" min="1" max="10" value="1" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Mark Not Spam</span>
-            <span class="setting-desc">Rescue warmup mail that lands in Spam</span>
-          </div>
-          <div class="setting-control">
-            <label class="toggle">
-              <input type="checkbox" id="warmTalkMarkNotSpamToggle" checked />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Reply Probability (%)</span>
-            <span class="setting-desc">Real users don't reply to everything</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkReplyProbabilityInput" class="number-input compact-number" min="0" max="100" value="70" />
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Active Hours</span>
-            <span class="setting-desc">Only run between these hours (0-23)</span>
-          </div>
-          <div class="setting-control">
-            <input type="number" id="warmTalkHoursStartInput" class="number-input compact-number" min="0" max="23" value="9" />
-            <input type="number" id="warmTalkHoursEndInput" class="number-input compact-number" min="0" max="23" value="18" />
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Active Days</span>
-            <span class="setting-desc">Days WarmTalk is allowed to run</span>
-          </div>
-          <div class="provider-checkbox-group" id="warmTalkDayGroup">
-            <label class="provider-option"><input type="checkbox" value="1" checked /> <span>Mon</span></label>
-            <label class="provider-option"><input type="checkbox" value="2" checked /> <span>Tue</span></label>
-            <label class="provider-option"><input type="checkbox" value="3" checked /> <span>Wed</span></label>
-            <label class="provider-option"><input type="checkbox" value="4" checked /> <span>Thu</span></label>
-            <label class="provider-option"><input type="checkbox" value="5" checked /> <span>Fri</span></label>
-            <label class="provider-option"><input type="checkbox" value="6" /> <span>Sat</span></label>
-            <label class="provider-option"><input type="checkbox" value="0" /> <span>Sun</span></label>
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Subject Templates</span>
-            <span class="setting-desc">One per line. A unique tracking tag is added automatically.</span>
-          </div>
-          <textarea id="warmTalkSubjectsInput" class="template-textarea" rows="4"></textarea>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Body Templates</span>
-            <span class="setting-desc">Separate each template with a line of --- . Line breaks inside a template are kept. Empty uses defaults.</span>
-          </div>
-          <textarea id="warmTalkBodiesInput" class="template-textarea" rows="8" placeholder="Hi,&#10;&#10;Just checking in on this.&#10;&#10;Thanks&#10;---&#10;Hello,&#10;&#10;Sharing a quick update.&#10;&#10;Best"></textarea>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Save Settings</span>
-            <span class="setting-desc">Apply WarmTalk configuration</span>
-          </div>
-          <div class="setting-control">
-            <button class="btn settings-action" id="btnSaveWarmTalkSettings">Save WarmTalk</button>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-name">Controls</span>
-            <span class="setting-desc">Start, pause, or stop WarmTalk</span>
-          </div>
-          <div class="account-actions">
-            <button class="btn settings-action" id="btnStartWarmTalk">Start</button>
-            <button class="btn settings-action" id="btnPauseWarmTalk">Pause</button>
-            <button class="btn settings-action danger" id="btnStopWarmTalk">Stop</button>
-          </div>
-        </div>
-
-        <div class="setting-row setting-row-stack">
-          <div class="setting-info">
-            <span class="setting-name">Stats</span>
-            <span class="setting-desc">Per-account WarmTalk activity</span>
-          </div>
-          <div class="account-list" id="warmTalkStatsList">
-            <div class="account-empty">No WarmTalk activity yet.</div>
+        <div id="accBackendContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="setting-row setting-row-stack">
+              <div class="backend-connector-grid">
+                <input type="text" id="backendBaseUrlInput" class="batch-select backend-base-url" placeholder="Server/Base URL" />
+                <input type="text" id="backendConnectorIdInput" class="batch-select" placeholder="Connector ID" />
+                <input type="password" id="backendTokenInput" class="batch-select" placeholder="Token" />
+                <input type="email" id="backendAccountInput" class="batch-select backend-account" placeholder="Account" />
+              </div>
+              <div class="backend-connector-actions">
+                <button class="btn settings-action" id="btnTestBackendConnection">Connect / Test</button>
+                <span class="connector-status" id="backendConnectionStatus">Not tested</span>
+              </div>
+              <div class="backend-connector-actions backend-worker-row">
+                <span class="connector-label">Worker Status</span>
+                <span class="connector-status" id="backendWorkerStatus">Disconnected</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
+
+      <!-- 3. Account Switching Accordion -->
+      <div class="accordion-item" id="accAccountItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accAccountContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-account">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Account Switching</span>
+              <span class="accordion-subtitle">Manage multiple logged-in accounts</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <span class="accordion-badge" id="accountSwitchingBadge">OFF</span>
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accAccountContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Enable Account Switching</span>
+                <span class="setting-desc">Process selected accounts one at a time</span>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="enableAccountSwitchingToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-row setting-row-stack" id="accountSelectionRow" style="display:none;">
+              <div class="setting-info">
+                <span class="setting-name">Accounts</span>
+                <span class="setting-desc">Only checked accounts participate</span>
+              </div>
+              <div class="account-list" id="accountList">
+                <div class="account-empty">Enable switching and open a supported inbox.</div>
+              </div>
+              <div class="account-actions">
+                <button class="btn settings-action" id="btnSelectAllAccounts">Select All</button>
+                <button class="btn settings-action" id="btnRefreshAccounts">Refresh Accounts</button>
+                <button class="btn settings-action" id="btnDeepScanGmail">Deep Scan Gmail</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Proxy Manager Accordion -->
+      <div class="accordion-item" id="accProxyItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accProxyContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-proxy">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Proxy Manager</span>
+              <span class="accordion-subtitle">Routing and account proxy settings</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <span class="accordion-badge" id="proxyManagerBadge">OFF</span>
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accProxyContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Enable Proxy Manager</span>
+                <span class="setting-desc">Apply assigned proxy before scan</span>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="proxyManagerToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Proxy Fallback</span>
+                <span class="setting-desc">Allow automation without proxy on failure</span>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="proxyFallbackToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Proxy Apply Mode</span>
+                <span class="setting-desc">Choose proxy application mode</span>
+              </div>
+              <div class="setting-control">
+                <select id="proxyApplyModeSelect" class="batch-select">
+                  <option value="off">Off</option>
+                  <option value="global">Same Proxy for All Tabs</option>
+                  <option value="perAccount">Per-Account Proxy</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-row" id="globalProxyRow" style="display:none;">
+              <div class="setting-info">
+                <span class="setting-name">Global Proxy</span>
+                <span class="setting-desc">Used in Same Proxy mode</span>
+              </div>
+              <div class="setting-control">
+                <select id="globalProxySelect" class="batch-select">
+                  <option value="">Select proxy</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="setting-row setting-row-stack proxy-manager-row">
+              <div class="setting-info">
+                <span class="setting-name">Proxy List</span>
+                <span class="setting-desc">Assign proxies to selected accounts</span>
+              </div>
+              <div class="proxy-form-grid">
+                <input type="text" id="proxyHostInput" class="batch-select" placeholder="Host" />
+                <input type="number" id="proxyPortInput" class="batch-select" placeholder="Port" min="1" max="65535" />
+                <input type="text" id="proxyUsernameInput" class="batch-select" placeholder="Username" />
+                <input type="password" id="proxyPasswordInput" class="batch-select" placeholder="Password" />
+                <input type="text" id="proxyCountryInput" class="batch-select" placeholder="Country" />
+                <input type="text" id="proxyCityInput" class="batch-select" placeholder="City" />
+                <select id="proxyTypeSelect" class="batch-select">
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                  <option value="socks5">SOCKS5</option>
+                  <option value="socks4">SOCKS4</option>
+                  <option value="residential">Residential</option>
+                  <option value="datacenter">Datacenter</option>
+                </select>
+                <select id="proxyAssignedToSelect" class="batch-select">
+                  <option value="">Assign account</option>
+                </select>
+              </div>
+              <button class="btn settings-action" id="btnAddProxy">+ Add Proxy</button>
+              <div class="proxy-list" id="proxyList">
+                <div class="account-empty">No proxies added yet.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Templates Accordion -->
+      <div class="accordion-item" id="accTemplatesItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accTemplatesContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-templates">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Templates</span>
+              <span class="accordion-subtitle">Automation &amp; reply workflows</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accTemplatesContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                Automation Templates
+              </div>
+              <div class="setting-row setting-row-stack automation-template-card">
+                <div class="template-controls">
+                  <select id="automationTemplateSelect" class="batch-select template-select">
+                    <option value="">Choose template</option>
+                  </select>
+                  <button class="btn settings-action" id="btnApplyAutomationTemplate" disabled>Apply</button>
+                </div>
+                <div class="template-controls">
+                  <input type="text" id="automationTemplateNameInput" class="batch-select template-name-input" maxlength="50" placeholder="Template name" />
+                  <button class="btn settings-action" id="btnSaveAutomationTemplate">Save Current</button>
+                  <button class="btn settings-action danger" id="btnDeleteAutomationTemplate" disabled>Delete</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-section">
+              <div class="sub-section-title">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                Reply Templates
+              </div>
+              <div class="setting-row setting-row-stack">
+                <span class="setting-desc">One template per line. Empty uses defaults.</span>
+                <textarea id="replyTemplatesInput" class="template-textarea" rows="4"></textarea>
+                <button class="btn settings-action" id="btnSaveTemplates">Save Templates</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. WarmTalk Accordion -->
+      <div class="accordion-item" id="accWarmTalkItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accWarmTalkContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-warmtalk">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"></path>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">WarmTalk</span>
+              <span class="accordion-subtitle">Email warmup automation</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <span class="accordion-badge" id="warmTalkBadge">OFF</span>
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accWarmTalkContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Enable WarmTalk</span>
+                <span class="setting-desc">Enrolled accounts email each other</span>
+              </div>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="warmTalkEnabledToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div id="warmTalkBody" style="display:none;">
+              
+              <!-- General -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                  General Settings
+                </div>
+                
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">WarmTalk Status</span>
+                    <span class="setting-desc">Live state</span>
+                  </div>
+                  <div class="setting-control">
+                    <span class="connector-status" id="warmTalkStatus">Stopped</span>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Dry Run</span>
+                    <span class="setting-desc">Compose and discard (no real send)</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkDryRunToggle" checked />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row setting-row-stack">
+                  <div class="setting-info">
+                    <span class="setting-name">Providers</span>
+                    <span class="setting-desc">Only checked providers participate</span>
+                  </div>
+                  <div class="provider-checkbox-group" id="warmTalkProviderGroup">
+                    <label class="provider-option"><input type="checkbox" value="gmail" checked /> <span>Gmail</span></label>
+                    <label class="provider-option"><input type="checkbox" value="yahoo" /> <span>Yahoo</span></label>
+                    <label class="provider-option"><input type="checkbox" value="aol" /> <span>AOL</span></label>
+                    <label class="provider-option"><input type="checkbox" value="outlook" /> <span>Outlook</span></label>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Allow Cross-Provider</span>
+                    <span class="setting-desc">Email between different providers</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkCrossProviderToggle" />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Enrolled Accounts -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+                  Enrolled Accounts
+                </div>
+                <div class="setting-row setting-row-stack">
+                  <span class="setting-desc">Minimum 2 accounts required.</span>
+                  <div class="account-list" id="warmTalkAccountList">
+                    <div class="account-empty">Run Deep Scan to detect accounts.</div>
+                  </div>
+                  <div class="account-actions">
+                    <button class="btn settings-action" id="btnWarmTalkSelectAll">Select All</button>
+                    <button class="btn settings-action" id="btnWarmTalkRefreshAccounts">Refresh Accounts</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Conversation Rules -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                  Conversation Rules
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Pairing Strategy</span>
+                    <span class="setting-desc">How pairs are chosen</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="warmTalkPairingSelect" class="batch-select">
+                      <option value="roundRobin">Round Robin</option>
+                      <option value="random">Random</option>
+                      <option value="mesh">Mesh (all-to-all)</option>
+                      <option value="manual">Manual Pairs</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="setting-row setting-row-stack" id="warmTalkManualPairsRow" style="display:none;">
+                  <div class="setting-info">
+                    <span class="setting-name">Manual Pairs</span>
+                    <span class="setting-desc">Define exact pairs</span>
+                  </div>
+                  <div class="setting-control">
+                    <select id="warmTalkPairFromSelect" class="batch-select"></select>
+                    <select id="warmTalkPairToSelect" class="batch-select"></select>
+                    <button class="btn settings-action" id="btnWarmTalkAddPair">Add Pair</button>
+                  </div>
+                  <div class="account-list" id="warmTalkPairList">
+                    <div class="account-empty">No manual pairs yet.</div>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Threaded Conversation</span>
+                    <span class="setting-desc">Keep replying back and forth</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkThreadToggle" />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row" id="warmTalkThreadTurnsRow" style="display:none;">
+                  <div class="setting-info">
+                    <span class="setting-name">Thread Turns</span>
+                    <span class="setting-desc">Replies per conversation</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkThreadTurnsInput" class="number-input compact-number" min="1" max="10" value="2" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Timing & Delays -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  Timing &amp; Delays
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Gap Between Cycles (min)</span>
+                    <span class="setting-desc">Min / Max delay</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkMinCycleInput" class="number-input compact-number" min="1" max="240" value="5" />
+                    <input type="number" id="warmTalkMaxCycleInput" class="number-input compact-number" min="1" max="240" value="15" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Reply Delay (sec)</span>
+                    <span class="setting-desc">Min / Max wait before opening</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkReplyMinInput" class="number-input compact-number" min="5" max="3600" value="45" />
+                    <input type="number" id="warmTalkReplyMaxInput" class="number-input compact-number" min="5" max="3600" value="180" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Read Time (sec)</span>
+                    <span class="setting-desc">Min / Max pause before reply</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkReadMinInput" class="number-input compact-number" min="0" max="600" value="5" />
+                    <input type="number" id="warmTalkReadMaxInput" class="number-input compact-number" min="0" max="600" value="20" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Active Hours</span>
+                    <span class="setting-desc">Start / End hour (0-23)</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkHoursStartInput" class="number-input compact-number" min="0" max="23" value="9" />
+                    <input type="number" id="warmTalkHoursEndInput" class="number-input compact-number" min="0" max="23" value="18" />
+                  </div>
+                </div>
+
+                <div class="setting-row setting-row-stack">
+                  <div class="setting-info">
+                    <span class="setting-name">Active Days</span>
+                    <span class="setting-desc">Days WarmTalk is allowed to run</span>
+                  </div>
+                  <div class="provider-checkbox-group" id="warmTalkDayGroup">
+                    <label class="provider-option"><input type="checkbox" value="1" checked /> <span>Mon</span></label>
+                    <label class="provider-option"><input type="checkbox" value="2" checked /> <span>Tue</span></label>
+                    <label class="provider-option"><input type="checkbox" value="3" checked /> <span>Wed</span></label>
+                    <label class="provider-option"><input type="checkbox" value="4" checked /> <span>Thu</span></label>
+                    <label class="provider-option"><input type="checkbox" value="5" checked /> <span>Fri</span></label>
+                    <label class="provider-option"><input type="checkbox" value="6" /> <span>Sat</span></label>
+                    <label class="provider-option"><input type="checkbox" value="0" /> <span>Sun</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Limits & Ramp-Up -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                  Caps &amp; Ramp-Up
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Daily Cap Per Account</span>
+                    <span class="setting-desc">Max sends/day (0 = no cap)</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkDailyCapInput" class="number-input compact-number" min="0" max="200" value="10" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Weekly Cap Per Account</span>
+                    <span class="setting-desc">Max sends/week (0 = no cap)</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkWeeklyCapInput" class="number-input compact-number" min="0" max="1000" value="40" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Ramp-Up</span>
+                    <span class="setting-desc">Gradually build up to daily cap</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkRampUpToggle" />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row" id="warmTalkRampUpRow" style="display:none;">
+                  <div class="setting-info">
+                    <span class="setting-name">Ramp-Up Curve</span>
+                    <span class="setting-desc">Start/day &amp; total days</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkRampUpStartInput" class="number-input compact-number" min="1" max="100" value="2" />
+                    <input type="number" id="warmTalkRampUpDaysInput" class="number-input compact-number" min="1" max="60" value="7" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Warmup Behavior -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                  Warmup Behavior
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Click Links In Mail</span>
+                    <span class="setting-desc">Simulate link engagement</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkLinkOpeningToggle" />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row" id="warmTalkMaxLinksRow" style="display:none;">
+                  <div class="setting-info">
+                    <span class="setting-name">Max Links Per Email</span>
+                    <span class="setting-desc">Links to open</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkMaxLinksInput" class="number-input compact-number" min="1" max="10" value="1" />
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Mark Not Spam</span>
+                    <span class="setting-desc">Rescue mail from Spam folder</span>
+                  </div>
+                  <div class="setting-control">
+                    <label class="toggle">
+                      <input type="checkbox" id="warmTalkMarkNotSpamToggle" checked />
+                      <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Reply Probability (%)</span>
+                    <span class="setting-desc">Simulate realistic reply rate</span>
+                  </div>
+                  <div class="setting-control">
+                    <input type="number" id="warmTalkReplyProbabilityInput" class="number-input compact-number" min="0" max="100" value="70" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- WarmTalk Templates -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                  WarmTalk Content Templates
+                </div>
+                
+                <div class="setting-row setting-row-stack">
+                  <div class="setting-info">
+                    <span class="setting-name">Subject Templates</span>
+                    <span class="setting-desc">One per line. Tracking tag added automatically.</span>
+                  </div>
+                  <textarea id="warmTalkSubjectsInput" class="template-textarea" rows="3"></textarea>
+                </div>
+
+                <div class="setting-row setting-row-stack">
+                  <div class="setting-info">
+                    <span class="setting-name">Body Templates</span>
+                    <span class="setting-desc">Separate templates with --- line.</span>
+                  </div>
+                  <textarea id="warmTalkBodiesInput" class="template-textarea" rows="6" placeholder="Hi,&#10;&#10;Just checking in.&#10;&#10;Thanks&#10;---&#10;Hello,&#10;&#10;Quick update.&#10;&#10;Best"></textarea>
+                </div>
+              </div>
+
+              <!-- Controls & Actions -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                  WarmTalk Controls
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Save Settings</span>
+                    <span class="setting-desc">Apply WarmTalk configuration</span>
+                  </div>
+                  <div class="setting-control">
+                    <button class="btn settings-action" id="btnSaveWarmTalkSettings">Save WarmTalk</button>
+                  </div>
+                </div>
+
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <span class="setting-name">Execution</span>
+                    <span class="setting-desc">Start, pause, or stop WarmTalk</span>
+                  </div>
+                  <div class="account-actions">
+                    <button class="btn settings-action" id="btnStartWarmTalk">Start</button>
+                    <button class="btn settings-action" id="btnPauseWarmTalk">Pause</button>
+                    <button class="btn settings-action danger" id="btnStopWarmTalk">Stop</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- WarmTalk Stats -->
+              <div class="sub-section">
+                <div class="sub-section-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></svg>
+                  WarmTalk Stats
+                </div>
+                <div class="setting-row setting-row-stack">
+                  <div class="account-list" id="warmTalkStatsList">
+                    <div class="account-empty">No WarmTalk activity yet.</div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. Activity Log Accordion -->
+      <div class="accordion-item" id="accLogItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accLogContent">
+          <div class="accordion-title-wrap">
+            <div class="accordion-icon-box icon-log">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+              </svg>
+            </div>
+            <div class="accordion-titles">
+              <span class="accordion-title">Activity Log</span>
+              <span class="accordion-subtitle">Recent automation activity</span>
+            </div>
+          </div>
+          <div class="accordion-header-right">
+            <svg class="accordion-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </div>
+        </button>
+
+        <div id="accLogContent" class="accordion-content" hidden>
+          <div class="accordion-inner">
+            <div class="log-card-header">
+              <div class="log-header-actions">
+                <button class="btn settings-action" id="btnCopyLogs">Copy</button>
+                <button class="btn settings-action" id="btnExportLogs">Export</button>
+                <button class="btn settings-action danger" id="btnClearLogs">Clear Log</button>
+              </div>
+            </div>
+            
+            <div class="log-filters">
+              <div class="log-filter-row">
+                <select id="logLevelFilter" class="batch-select log-filter-level" aria-label="Filter by level">
+                  <option value="all">All levels</option>
+                  <option value="info">Info</option>
+                  <option value="success">Success</option>
+                  <option value="warn">Warning</option>
+                  <option value="error">Error</option>
+                </select>
+                <input type="text" id="logSearchInput" class="batch-select log-filter-search" placeholder="Search logs…" />
+              </div>
+              <div class="log-filter-row">
+                <label class="log-date-field">
+                  <span>From</span>
+                  <input type="date" id="logFromDate" class="batch-select" aria-label="From date" />
+                </label>
+                <label class="log-date-field">
+                  <span>To</span>
+                  <input type="date" id="logToDate" class="batch-select" aria-label="To date" />
+                </label>
+                <button class="btn settings-action" id="btnClearLogFilters" type="button">Reset</button>
+              </div>
+            </div>
+
+            <div class="log-scroll" id="logScroll">
+              <div class="log-empty" id="logEmpty">No activity yet. Start the automation.</div>
+            </div>
+            <button class="btn settings-action log-load-older" id="btnLoadOlderLogs" hidden>Load older logs</button>
+          </div>
+        </div>
+      </div>
+
     </div>
 
-    <!-- Activity Log -->
-    <div class="card log-card">
-      <div class="log-header">
-        <div class="card-label">Activity Log</div>
-        <div class="log-header-actions">
-          <button class="btn settings-action" id="btnCopyLogs">Copy</button>
-          <button class="btn settings-action" id="btnExportLogs">Export</button>
-          <button class="btn settings-action danger" id="btnClearLogs">Clear Log</button>
-        </div>
-      </div>
-      <div class="log-filters">
-        <div class="log-filter-row">
-          <select id="logLevelFilter" class="batch-select log-filter-level" aria-label="Filter by level">
-            <option value="all">All levels</option>
-            <option value="info">Info</option>
-            <option value="success">Success</option>
-            <option value="warn">Warning</option>
-            <option value="error">Error</option>
-          </select>
-          <input type="text" id="logSearchInput" class="batch-select log-filter-search" placeholder="Search logs…" />
-        </div>
-        <div class="log-filter-row">
-          <label class="log-date-field">
-            <span>From</span>
-            <input type="date" id="logFromDate" class="batch-select" aria-label="From date" />
-          </label>
-          <label class="log-date-field">
-            <span>To</span>
-            <input type="date" id="logToDate" class="batch-select" aria-label="To date" />
-          </label>
-          <button class="btn settings-action" id="btnClearLogFilters" type="button">Reset</button>
-        </div>
-      </div>
-      <div class="log-scroll" id="logScroll">
-        <div class="log-empty" id="logEmpty">No activity yet. Start the automation.</div>
-      </div>
-      <button class="btn settings-action log-load-older" id="btnLoadOlderLogs" hidden>Load older logs</button>
-    </div>
-
+    <!-- Footer -->
     <footer class="footer">
       <span>Email Read Automate v1.0.0(v2)</span>
     </footer>
