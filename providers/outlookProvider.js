@@ -623,6 +623,52 @@
       return notJunkButton;
     }
 
+    // Outlook's confirmation dialog is a Fluent DialogSurface, and Fluent marks
+    // that surface aria-hidden="true" even while it is on screen and accepting
+    // clicks. isVisibleElement() rejects aria-hidden nodes, so filtering dialog
+    // containers with it dropped the live "Report not junk" dialog every time:
+    // the OK button was never even looked at, the modal stayed up, and every
+    // later click in the tab was blocked by it. Measured live on outlook.live.com:
+    // surface 600x154, display:block, visibility:visible, aria-hidden="true",
+    // with an enabled OK button inside that is NOT aria-hidden.
+    //
+    // So judge a dialog container on whether it is actually rendered, and leave
+    // the aria-hidden test to the button check below, where it still holds.
+    //
+    // Opacity is what separates a live dialog from a dead one: Fluent leaves
+    // dismissed surfaces mounted at opacity:0 while still reporting
+    // display:block, visibility:visible and a full-size box. Without an opacity
+    // test this would happily click the OK button of an already-dismissed
+    // dialog. checkVisibility({opacityProperty}) also covers ancestor opacity,
+    // which a plain getComputedStyle on the surface alone would miss.
+    function isRenderedDialogSurface(element) {
+      if (!element) return false;
+
+      const rect = element.getBoundingClientRect();
+      if (!(rect.width > 0 && rect.height > 0)) return false;
+      if (element.hasAttribute("hidden")) return false;
+
+      if (typeof element.checkVisibility === "function") {
+        return element.checkVisibility({
+          opacityProperty: true,
+          visibilityProperty: true,
+        });
+      }
+
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    }
+
+    function getRenderedDialogSurfaces() {
+      return Array.from(document.querySelectorAll(
+        '[role="dialog"], [aria-modal="true"], [role="alertdialog"]'
+      )).filter(isRenderedDialogSurface);
+    }
+
     // After "Not junk", Outlook pops a "We won't send messages from X to Junk in
     // the future" dialog with an OK button. It can appear a second or two late,
     // so poll for it instead of checking once — otherwise the message is left
@@ -632,9 +678,10 @@
       const start = Date.now();
 
       while (Date.now() - start < maxWait) {
-        const dialogs = Array.from(document.querySelectorAll(
-          '[role="dialog"], [aria-modal="true"], [role="alertdialog"]'
-        )).filter(isVisibleElement);
+        // Keep polling rather than bailing when nothing is up yet: this is also
+        // called straight after the Not junk click, before Outlook has mounted
+        // the dialog at all.
+        const dialogs = getRenderedDialogSurfaces();
 
         for (const dialog of dialogs) {
           const buttons = Array.from(dialog.querySelectorAll('button, [role="button"], input[type="button"]'));
@@ -696,7 +743,16 @@
         // A confirmation dialog can surface late, after clickPossibleConfirmation
         // has already returned. If one is up, dismiss it here too — otherwise it
         // blocks the move and this wait would time out.
-        if (document.querySelector('[role="dialog"], [aria-modal="true"], [role="alertdialog"]')) {
+        //
+        // This must use the rendered-surface test, not a bare querySelector.
+        // Fluent leaves every dismissed dialog mounted at opacity:0 forever, so
+        // a bare selector match stays true for the rest of the page's life — and
+        // this branch then re-ran clickPossibleConfirmation(1500) on every single
+        // 400ms iteration, rescanning every dialog and button each time. Measured
+        // on outlook.live.com that redundant work is cheap (~0.7ms a pass, on an
+        // 835-node DOM), so it was never the cause of the tab freezing — but it
+        // is still pure waste, and it stretched every confirmation wait.
+        if (getRenderedDialogSurfaces().length > 0) {
           await clickPossibleConfirmation(1500);
         }
 
