@@ -37,7 +37,7 @@
       sendButtons: ['button[aria-label^="Send"]', 'button[title^="Send"]'],
     },
     proton: {
-      replyButtons: ['[data-testid="message-view:reply-button"]', 'button[title^="Reply"]'],
+      replyButtons: ['[data-testid="message-view:reply"]', '[data-testid="message-view:reply-button"]', 'button[title^="Reply"]'],
       body: ['[data-testid="rooster-editor"]', 'div[contenteditable="true"]'],
       sendButtons: ['[data-testid="composer:send-button"]', 'button[title^="Send"]'],
     },

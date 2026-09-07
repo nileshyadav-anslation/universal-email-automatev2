@@ -126,7 +126,7 @@ const PROVIDER_URLS = {
   yahoo: 'https://mail.yahoo.com/n/folders/1?.src=ym&reason=myc',
   aol: 'https://mail.aol.com/d/folders/1',
   outlook: 'https://outlook.live.com/mail/0/',
-  proton: 'https://mail.proton.me',
+  proton: 'https://mail.proton.me/',
   zoho: 'https://mail.zoho.com'
 };
 const GOOGLE_LIST_ACCOUNTS_URL = 'https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard';
@@ -135,7 +135,7 @@ const GMAIL_PROBE_URL_TIMEOUT = 3500;
 const GMAIL_PROBE_CONTENT_TIMEOUT = 2000;
 const GMAIL_PROBE_CONSECUTIVE_MISS_LIMIT = 3;
 
-const MULTI_PROVIDER_IDS = ['gmail', 'yahoo', 'aol', 'outlook'];
+const MULTI_PROVIDER_IDS = ['gmail', 'yahoo', 'aol', 'outlook', 'proton'];
 const PROVIDER_LABELS = {
   gmail: 'Gmail',
   yahoo: 'Yahoo',
@@ -1756,9 +1756,99 @@ async function isAutomationSessionActive() {
   return false;
 }
 
+function readProtonChooserAccounts() {
+  // The chooser writes its account links in two different shapes depending on
+  // how it was reached: "account.proton.me/apps?u=3" when opened directly, and
+  // "mail.proton.me/u/3" when bounced here from an unresolvable mailbox URL.
+  // Accept both, and dedupe since the same account can appear once per shape.
+  const seen = new Set();
+
+  return Array.from(document.querySelectorAll('a[href]'))
+    .map((anchor) => {
+      const href = anchor.getAttribute('href') || '';
+      const index = (href.match(/[?&]u=(\d+)/) || href.match(/\/u\/(\d+)(?:[/?#]|$)/) || [])[1];
+      if (!index || seen.has(index)) return null;
+      seen.add(index);
+
+      const text = (anchor.innerText || anchor.textContent || '').replace(/\s+/g, ' ').trim();
+      return {
+        index: parseInt(index, 10),
+        email: (text.match(/[\w.+-]+@[\w.-]+\.\w+/) || [])[0] || ''
+      };
+    })
+    .filter(Boolean);
+}
+
+function isProtonChooserUrl(url = '') {
+  return url.includes('account.proton.me/switch');
+}
+
+// The chooser is a SPA: its account links land after the tab reports
+// complete, so a single read on arrival returns nothing.
+async function readProtonChooserWithRetry(tabId, attempts = 10) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    let accounts = [];
+    try {
+      const [injected] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: readProtonChooserAccounts
+      });
+      accounts = Array.isArray(injected?.result) ? injected.result : [];
+    } catch (error) {
+      accounts = [];
+    }
+
+    if (accounts.length) return accounts;
+    await delay(500);
+  }
+
+  return [];
+}
+
+// Proton shows account.proton.me/switch whenever the requested mailbox is
+// ambiguous or the /u/N index does not exist. The chooser lists every
+// signed-in account as ?u=N, so resolve it to a concrete mailbox instead of
+// leaving the run parked on a page with no message list.
+async function resolveProtonAccountChooser(tabId, desiredIndex = null) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.url || !isProtonChooserUrl(tab.url)) return false;
+
+  const accounts = await readProtonChooserWithRetry(tabId);
+
+  const wanted = Number.isFinite(desiredIndex)
+    ? accounts.find(account => account.index === desiredIndex)
+    : null;
+  // Fall back to the bare host, which Proton routes to the last-used account.
+  const target = wanted
+    ? `https://mail.proton.me/u/${wanted.index}/inbox`
+    : (accounts.length
+      ? `https://mail.proton.me/u/${accounts[0].index}/inbox`
+      : 'https://mail.proton.me/');
+
+  await logAccountSwitchFailure(
+    `[Proton] Account chooser shown; continuing to ${wanted ? wanted.email || `account ${wanted.index}` : 'the last used account'}.`
+  );
+
+  await chrome.tabs.update(tabId, { url: target });
+  await waitForTabComplete(tabId, 60000);
+  await delay(2500);
+
+  const settled = await chrome.tabs.get(tabId).catch(() => null);
+  return Boolean(settled?.url && !isProtonChooserUrl(settled.url));
+}
+
 async function getMailTab(provider = 'gmail') {
   const tabs = await chrome.tabs.query({});
-  return tabs.find(tab => tab.id && tab.url && isProviderUrl(tab.url, provider)) || null;
+  const direct = tabs.find(tab => tab.id && tab.url && isProviderUrl(tab.url, provider));
+  if (direct) return direct;
+
+  // A Proton tab parked on the account chooser is still this provider's tab -
+  // without this it is invisible here and a second tab gets opened beside it.
+  if (provider === 'proton') {
+    return tabs.find(tab => tab.id && tab.url && isProtonChooserUrl(tab.url)) || null;
+  }
+
+  return null;
 }
 
 async function getOrCreateMailTab(provider = 'gmail') {
@@ -1777,12 +1867,26 @@ async function getOrCreateMailTab(provider = 'gmail') {
     if (tab.windowId) {
       await chrome.windows.update(tab.windowId, { focused: true }).catch(() => null);
     }
+
+    // An adopted Proton tab may be sitting on the account chooser rather than a
+    // mailbox. Resolve it here, or the isProviderUrl check in the callers sees
+    // account.proton.me and aborts the run as "requires manual login".
+    if (provider === 'proton' && isProtonChooserUrl(tab.url || '')) {
+      await resolveProtonAccountChooser(tab.id).catch(() => false);
+      return chrome.tabs.get(tab.id);
+    }
+
     return tab;
   }
 
   tab = await chrome.tabs.create({ url: defaultUrl, active: true });
   await waitForTabComplete(tab.id, 60000);
   await delay(2500);
+
+  if (provider === 'proton') {
+    await resolveProtonAccountChooser(tab.id).catch(() => false);
+  }
+
   return chrome.tabs.get(tab.id);
 }
 
@@ -2212,6 +2316,35 @@ async function discoverAccountsForProvider(provider, options = {}) {
     }
 
     const tab = await getOrCreateMailTab(provider);
+
+    // If Proton is still showing its account chooser, read the accounts from
+    // that page directly. It lists every signed-in account with its email, so
+    // discovery does not need a loaded mailbox at all.
+    if (provider === 'proton') {
+      const current = await chrome.tabs.get(tab.id).catch(() => null);
+      if (current?.url && isProtonChooserUrl(current.url)) {
+        const chooserAccounts = await readProtonChooserWithRetry(tab.id);
+
+        if (chooserAccounts.length) {
+          result.ok = true;
+          result.accounts = chooserAccounts
+            .sort((a, b) => a.index - b.index)
+            .map(account => ({
+              id: `proton:${account.index}`,
+              label: account.email || `Proton account ${account.index}`,
+              email: account.email || '',
+              index: account.index,
+              provider: 'proton',
+              url: `https://mail.proton.me/u/${account.index}/inbox`
+            }));
+
+          const message = `[Proton] Found ${result.accounts.length} account(s) from the account chooser.`;
+          chrome.runtime.sendMessage({ type: 'LOG', message, level: 'success', provider }).catch(() => {});
+          addActivityLogEntry(message, 'success').catch(() => {});
+          return result;
+        }
+      }
+    }
 
     if (tab?.url && isProviderLoginUrl(tab.url, provider)) {
       result.warning = getProviderLoginFailure(provider);
@@ -2720,6 +2853,7 @@ async function injectAutomationScripts(tabId) {
       'providers/yahooProvider.js',
       'providers/aolProvider.js',
       'providers/outlookProvider.js',
+      'providers/protonProvider.js',
       'content.js'
     ]
   });
@@ -2768,6 +2902,15 @@ function getSwitchUrl(account) {
     }
   }
 
+  // Proton keys accounts by the same /u/N URL index Gmail uses, so switching
+  // is a navigation rather than an in-page account menu.
+  if (account.provider === 'proton' || account.id?.startsWith('proton:')) {
+    const match = account.id.match(/^proton:(\d+)$/);
+    if (match) {
+      return `https://mail.proton.me/u/${match[1]}/inbox`;
+    }
+  }
+
   if (!account.url) return null;
 
   try {
@@ -2803,6 +2946,9 @@ function getProviderLoginFailure(provider) {
   if (provider === 'aol') {
     return 'AOL requires manual login for this account. Please sign in manually, then restart automation.';
   }
+  if (provider === 'proton') {
+    return 'Proton requires manual login. Please sign in to this Proton account manually, then restart automation.';
+  }
   return 'Inbox did not finish loading after account switch';
 }
 
@@ -2811,6 +2957,13 @@ function isProviderLoginUrl(url = '', provider = '') {
   if (provider === 'yahoo') return url.includes('login.yahoo.com');
   if (provider === 'outlook') return url.includes('login.live.com') || url.includes('login.microsoftonline.com');
   if (provider === 'aol') return url.includes('login.aol.com') || url.includes('login.yahoo.com');
+  if (provider === 'proton') {
+    // /switch is the "Choose an account" chooser, not a login wall - the user
+    // is already signed in there, so it is recoverable (see
+    // resolveProtonAccountChooser). Anything else on account.proton.me is a
+    // real sign-in.
+    return url.includes('account.proton.me') && !url.includes('/switch');
+  }
   return false;
 }
 
@@ -2898,6 +3051,62 @@ async function waitForGmailSwitchResult(tabId, expectedAccount, timeout = 45000)
   return { ok: false, error: getProviderLoginFailure('gmail') };
 }
 
+function getProtonAccountIndexFromUrl(url = '') {
+  const match = String(url || '').match(/mail\.proton\.me\/u\/(\d+)(?:\/|#|\?|$)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+// Without this a Proton switch reported success the moment ANY page
+// finished loading - including the account chooser or the wrong mailbox -
+// so the run would carry on reading and replying from the wrong account.
+async function waitForProtonSwitchResult(tabId, expectedAccount, timeout = 45000) {
+  const expectedIndexMatch = String(expectedAccount?.id || '').match(/^proton:(\d+)$/);
+  const expectedIndex = expectedIndexMatch ? parseInt(expectedIndexMatch[1], 10) : null;
+  const start = Date.now();
+  let chooserAttempts = 0;
+
+  while (Date.now() - start < timeout) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const url = tab?.url || '';
+
+    // The chooser is recoverable, not a failure: steer it to the account we
+    // actually asked for rather than whatever Proton would default to.
+    if (url && isProtonChooserUrl(url)) {
+      if (chooserAttempts >= 2) {
+        return { ok: false, error: 'Proton kept returning to the account chooser. Sign in to that account manually, then restart automation.' };
+      }
+
+      chooserAttempts += 1;
+      await resolveProtonAccountChooser(tabId, expectedIndex).catch(() => false);
+      await delay(1000);
+      continue;
+    }
+
+    if (url && isProviderLoginUrl(url, 'proton') && Date.now() - start > 5000) {
+      return { ok: false, error: getProviderLoginFailure('proton') };
+    }
+
+    if (url && isProviderUrl(url, 'proton') && tab.status === 'complete') {
+      const currentIndex = getProtonAccountIndexFromUrl(url);
+
+      if (!Number.isFinite(expectedIndex) || currentIndex === expectedIndex) {
+        return { ok: true };
+      }
+
+      if (Number.isFinite(currentIndex) && currentIndex !== expectedIndex && Date.now() - start > 5000) {
+        return {
+          ok: false,
+          error: `Proton switched to account ${currentIndex}, not ${expectedIndex}. Make sure that Proton account is signed in.`
+        };
+      }
+    }
+
+    await delay(500);
+  }
+
+  return { ok: false, error: getProviderLoginFailure('proton') };
+}
+
 async function restartAutomationInTab(tabId, settings = {}) {
   await ensureAutomationScripts(tabId).catch(async () => {
     await delay(1000);
@@ -2974,7 +3183,9 @@ async function switchMailAccount(tabId, account, settings) {
   await chrome.tabs.update(tabId, { url, active: true });
   const loaded = provider === 'gmail'
     ? await waitForGmailSwitchResult(tabId, account, 45000)
-    : { ok: await waitForTabComplete(tabId, 45000) };
+    : provider === 'proton'
+      ? await waitForProtonSwitchResult(tabId, account, 45000)
+      : { ok: await waitForTabComplete(tabId, 45000) };
 
   if (!loaded.ok) {
     return { ok: false, error: loaded.error || 'Inbox did not finish loading after account switch' };

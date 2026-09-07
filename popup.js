@@ -125,6 +125,7 @@ const PROVIDER_OPTIONS = [
   { id: 'yahoo', label: 'Yahoo' },
   { id: 'aol', label: 'AOL' },
   { id: 'outlook', label: 'Outlook' },
+  { id: 'proton', label: 'Proton' },
 ];
 
 const BUILT_IN_AUTOMATION_TEMPLATES = [
@@ -2024,6 +2025,7 @@ async function ensureContentScript(tabId) {
       'providers/yahooProvider.js',
       'providers/aolProvider.js',
       'providers/outlookProvider.js',
+      'providers/protonProvider.js',
       'content.js'
     ]
   });

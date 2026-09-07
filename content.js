@@ -84,41 +84,57 @@
 proton: {
   host: "mail.proton.me",
 
+  // Read off a live logged-in Proton tab. A row is
+  // div.item-container.item-container--row and carries data-element-id, which
+  // is the same id Proton puts in the URL when the message is opened.
   unreadSelectors: [
-    '[data-testid="message-row"]',
-    '.conversation',
-    '[aria-label*="Unread"]'
+    'div.item-container.unread',
+    '[data-shortcut-target="item-container"].unread',
+    '.item-container--row.unread',
   ],
 
   subjectSelectors: [
-    '.conversation-title',
+    '[data-testid="message-row:subject"]',
     '[data-testid="message-column:subject"]',
-    '.item-subject'
+    '[id^="message-subject-"]',
   ],
 
-  refreshSelectors: [
-    '[data-testid="refresh-button"]',
-    'button[title="Refresh"]'
-  ],
+  // Intentionally empty: Proton's refresh control is an <svg> inside each
+  // folder link, one per folder, so a querySelector hit returns the Inbox one
+  // and clicking it while in Spam navigates out of Spam. refreshCurrentMailbox
+  // re-navigates the current mailbox for Proton instead.
+  refreshSelectors: [],
 
+  // The opened-message markers. NOTE: the body text and links are NOT here -
+  // they live in iframe[data-testid="content-iframe"]; see
+  // protonProvider.getOpenedBodyRoot().
   emailOpenSelectors: [
-    '.message-container',
-    '.message-body',
-    '[data-testid="message-view"]'
+    '[data-shortcut-target="message-container"]',
+    '[data-testid^="message-view-"]',
+    '[data-testid="message-content:body"]',
+    'article.message-container',
+  ],
+
+  bodySelectors: [
+    '[data-testid="message-content:body"]',
+    '.message-content',
+    '[data-shortcut-target="message-container"]',
   ],
 
   inboxSelectors: [
-    '.items-column-list',
-    '[data-testid="messages-list"]'
+    '[data-shortcut-target="item-container"]',
+    'div.item-container--row',
+    'div.item-container',
+    '[data-testid="message-list-loaded"]',
+    'section.items-column-list',
   ],
 
+  // Proton marks an unread row with a plain "unread" class on the row itself.
+  // The old check also scanned innerHTML for the word "unread", which matched
+  // any message whose body happened to contain it.
   isUnreadRow(row) {
-
-    return (
-      row.classList.contains("is-unread") ||
-
-      row.innerHTML.toLowerCase().includes("unread")
-    );
+    const item = row.closest?.('[data-shortcut-target="item-container"], .item-container') || row;
+    return item.classList.contains("unread");
   }
 },
 zoho: {
@@ -390,6 +406,7 @@ zoho: {
   let yahooProvider = null;
   let aolProvider = null;
   let outlookProvider = null;
+  let protonProvider = null;
   let activeAccount = null;
   let manualPauseUntil = 0;
   let manualPauseLogged = false;
@@ -530,6 +547,18 @@ zoho: {
   function getEmailBodyRoot() {
     if (!provider) return document;
 
+    // Proton renders the message body inside iframe[data-testid="content-iframe"].
+    // The main document's .message-content wrapper holds NO links, so without
+    // this the link extractor would find zero links and the run would look like
+    // it worked. The iframe is about:blank + allow-same-origin, so its
+    // contentDocument is reachable from here.
+    if (provider.host.includes("proton")) {
+      // Deliberately returns null rather than falling through to `document`:
+      // the whole-page fallback would hand extractLinks Proton's own sidebar
+      // and the automation would start opening Proton UI links.
+      return getProtonProvider()?.getOpenedBodyRoot?.() || null;
+    }
+
     const selectors = provider.bodySelectors || provider.emailOpenSelectors;
     for (const sel of selectors) {
       const el = document.querySelector(sel);
@@ -547,6 +576,11 @@ zoho: {
 
   function isVisibleOpenElement(element) {
     if (!element) return false;
+
+    // Proton's body root lives in a same-origin iframe. Inside that document
+    // <body>.offsetParent is null even while it is plainly on screen, so the
+    // check below would reject it and waitForEmailContentLoaded would spin out.
+    if (element.ownerDocument && element.ownerDocument !== document) return true;
 
     if (provider && provider.host.includes("aol")) {
       const rect = element.getBoundingClientRect();
@@ -872,6 +906,7 @@ zoho: {
     if (provider.host.includes("aol")) return "AOL";
     if (provider.host.includes("outlook")) return "Outlook";
     if (provider.host.includes("google")) return "Gmail";
+    if (provider.host.includes("proton")) return "Proton";
     return providerName;
   }
 
@@ -1222,6 +1257,31 @@ zoho: {
     return;
   }
 
+  // Proton: the reading pane has a real Back control, and it returns to
+  // whichever folder/category the message was opened from - which is what keeps
+  // Spam processing inside Spam.
+  if (provider.host.includes("proton")) {
+    const proton = getProtonProvider();
+    const backBtn = proton?.getBackButton?.();
+
+    if (backBtn) {
+      clickElementLikeUser(backBtn);
+      return;
+    }
+
+    // Click Proton's own sidebar link for the mailbox we are working in. Never
+    // assign location.href here - that is a full page load and it would tear
+    // down this content script in the middle of the run.
+    const folderLink = proton?.getNavLink?.(proton.getCurrentFolder());
+    if (folderLink) {
+      clickElementLikeUser(folderLink);
+      return;
+    }
+
+    window.history.back();
+    return;
+  }
+
   // Outlook
   if (provider.host.includes("outlook")) {
     const visibleRows = Array.from(document.querySelectorAll([
@@ -1253,24 +1313,6 @@ zoho: {
     }
 
     window.history.back();
-    return;
-  }
-
-  // Proton
-  if (provider.host.includes("proton")) {
-
-    const inboxBtn =
-      document.querySelector('[data-testid="navigation-link:inbox"]') ||
-      document.querySelector('[title="Inbox"]');
-
-    if (inboxBtn) {
-      inboxBtn.click();
-      return;
-    }
-
-    window.location.href =
-      "https://mail.proton.me/u/0/inbox";
-
     return;
   }
 
@@ -1572,6 +1614,12 @@ zoho: {
     if (provider?.host?.includes("yahoo")) return getYahooProvider();
     if (provider?.host?.includes("outlook")) return getOutlookProvider();
     if (provider?.host?.includes("aol")) return getAolProvider();
+    // Proton supplies discoverAccounts()/getActiveAccount() but deliberately no
+    // switchAccount(): the switch itself is a /u/N navigation driven from
+    // background.js, like Gmail. Without this the generic DOM scraper below
+    // reports Proton's sidebar links ("Manage your folders", the storage meter)
+    // as if they were accounts.
+    if (provider?.host?.includes("proton")) return getProtonProvider();
     return null;
   }
 
@@ -1756,7 +1804,9 @@ zoho: {
     }
 
     if (provider.host.includes("proton")) {
-      return row.querySelector('[data-testid="message-row"]') || row.querySelector(".conversation") || row;
+      return row.closest('[data-shortcut-target="item-container"]') ||
+        row.closest(".item-container") ||
+        row;
     }
 
     if (provider.host.includes("zoho")) {
@@ -1846,6 +1896,11 @@ zoho: {
     return (
       row.getAttribute("data-thread-id") ||
       row.getAttribute("data-convid") ||
+      // Proton. Must come before data-testid: Proton's testid is
+      // `message-item:${subject}`, which collides across same-subject mail and
+      // changes when a subject does. data-element-id is the stable message id
+      // and is the same value Proton puts in the URL when the mail is opened.
+      row.getAttribute("data-element-id") ||
       row.getAttribute("data-testid") ||
       row.getAttribute("id") ||
       (innerItem && innerItem.getAttribute("data-test-id-msg-id")) ||
@@ -2065,6 +2120,22 @@ zoho: {
     return outlookProvider;
   }
 
+  function getProtonProvider() {
+    if (!protonProvider && window.ProtonProvider) {
+      protonProvider = window.ProtonProvider.create({
+        getProvider: () => provider,
+        getState: () => state,
+        sleep,
+        log,
+        waitForInbox,
+        getEmailRowId,
+        getEmailSubject,
+      });
+    }
+
+    return protonProvider;
+  }
+
   //  Main Automation Loop
 
   function isGmailProvider() {
@@ -2087,11 +2158,17 @@ zoho: {
     return Boolean(outlook && outlook.isProvider());
   }
 
+  function isProtonProvider() {
+    const proton = getProtonProvider();
+    return Boolean(proton && proton.isProvider());
+  }
+
   function getMailboxProvider() {
     if (isGmailProvider()) return getGmailProvider();
     if (isYahooProvider()) return getYahooProvider();
     if (isAolProvider()) return getAolProvider();
     if (isOutlookProvider()) return getOutlookProvider();
+    if (isProtonProvider()) return getProtonProvider();
     return null;
   }
 
@@ -2385,7 +2462,7 @@ zoho: {
 
     if (refreshBtn) {
       refreshBtn.click();
-    } else if (isYahooProvider() || isOutlookProvider() || isAolProvider()) {
+    } else if (isYahooProvider() || isOutlookProvider() || isAolProvider() || isProtonProvider()) {
       const mailboxProvider = getMailboxProvider();
       if (mailboxProvider && mailboxProvider.navigateMailbox) {
         await mailboxProvider.navigateMailbox(mailboxLabel === "Spam" ? "spam" : "inbox");
@@ -3173,7 +3250,7 @@ zoho: {
             }
           }
 
-          if ((isYahooProvider() || isAolProvider() || isOutlookProvider()) && mailboxLabel === "Spam") {
+          if ((isYahooProvider() || isAolProvider() || isOutlookProvider() || isProtonProvider()) && mailboxLabel === "Spam") {
             log(`Finished ${mailboxLabel}.`, "success");
             break;
           }
@@ -3523,6 +3600,7 @@ zoho: {
       getYahooProvider()?.clearMovedSpamQueue();
       getAolProvider()?.clearMovedSpamQueue();
       getOutlookProvider()?.clearMovedSpamQueue();
+      getProtonProvider()?.clearMovedSpamQueue();
       manualPauseUntil = 0;
       manualPauseLogged = false;
       settings = {
