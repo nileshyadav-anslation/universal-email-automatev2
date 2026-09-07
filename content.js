@@ -364,7 +364,7 @@ zoho: {
   let state = "idle"; // idle | running | paused | stopped
   let emailsOpened = 0;
   let settings = {
-    readTime: 4,
+    readTime: 6,
     backDelay: 2,
     autoRefresh: true,
     randomEmailOpening: false,
@@ -373,11 +373,11 @@ zoho: {
     processGmailPromotions: true,
     gmailPromotionsPageLimit: 2,
     gmailInboxPageLimit: 2,
-    maxEmails: 20,
+    maxEmails: 5,
     maxLinksPerEmail: 1,
     enableLinkOpening: true,
-    enableAutoReply: true,
-    enableProcessedTracking: true,
+    enableAutoReply: false,
+    enableProcessedTracking: false,
     reprocessingMode: "never",
     enableAccountSwitching: false,
     selectedAccounts: [],
