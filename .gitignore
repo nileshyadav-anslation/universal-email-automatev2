@@ -13,3 +13,7 @@ gsd-file-manifest.json
 .codex/
 AGENTS.md
 graphify-out/
+
+# Launcher: machine-specific profile list and run logs
+launcher/profiles.json
+launcher/logs/

@@ -39,6 +39,7 @@ const readTimeVal     = $('readTimeVal');
 const backDelayVal    = $('backDelayVal');
 const autoRefreshToggle = $('autoRefreshToggle');
 const continuousModeToggle = $('continuousModeToggle');
+const autoStartToggle = $('autoStartToggle');
 const continuousDelayMinutesInput = $('continuousDelayMinutesInput');
 const randomEmailOpeningToggle = $('randomEmailOpeningToggle');
 const retryEmailOpeningToggle = $('retryEmailOpeningToggle');
@@ -92,6 +93,7 @@ const DEFAULT_SETTINGS = {
   readTime: 6,
   backDelay: 2,
   autoRefresh: true,
+  autoStartOnBrowserStartup: true,
   enableContinuousMode: false,
   continuousDelayMinutes: 10,
   randomEmailOpening: false,
@@ -919,6 +921,15 @@ backendTokenInput.addEventListener('change', saveSettings);
 backendAccountInput.addEventListener('change', saveSettings);
 btnTestBackendConnection.addEventListener('click', testBackendConnection);
 autoRefreshToggle.addEventListener('change', saveSettings);
+autoStartToggle.addEventListener('change', () => {
+  saveSettings();
+  log(
+    autoStartToggle.checked
+      ? 'Auto-start on: this profile will start automation by itself 30-60s after Chrome opens it.'
+      : 'Auto-start off.',
+    'info'
+  );
+});
 continuousModeToggle.addEventListener('change', async () => {
   saveSettings();
 
@@ -1246,6 +1257,7 @@ function getCurrentSettings() {
     readTime: parseInt(readTimeSlider.value) || DEFAULT_SETTINGS.readTime,
     backDelay: parseInt(backDelaySlider.value) || DEFAULT_SETTINGS.backDelay,
     autoRefresh: autoRefreshToggle.checked,
+    autoStartOnBrowserStartup: autoStartToggle.checked,
     enableContinuousMode: continuousModeToggle.checked,
     continuousDelayMinutes,
     randomEmailOpening: randomEmailOpeningToggle.checked,
@@ -1296,6 +1308,7 @@ function loadSettings() {
     'readTime',
     'backDelay',
     'autoRefresh',
+    'autoStartOnBrowserStartup',
     'enableContinuousMode',
     'continuousDelayMinutes',
     'randomEmailOpening',
@@ -1376,6 +1389,9 @@ function loadSettings() {
     if (data.autoRefresh !== undefined) {
       autoRefreshToggle.checked = data.autoRefresh;
     }
+    // Machine-level preference: deliberately not part of automation templates,
+    // so applying a template can never switch it on or off.
+    autoStartToggle.checked = data.autoStartOnBrowserStartup !== false;
     continuousModeToggle.checked = data.enableContinuousMode !== undefined ? data.enableContinuousMode : DEFAULT_SETTINGS.enableContinuousMode;
     continuousDelayMinutesInput.value = validateContinuousDelayMinutes(
       data.continuousDelayMinutes !== undefined ? data.continuousDelayMinutes : DEFAULT_SETTINGS.continuousDelayMinutes

@@ -24,6 +24,15 @@ const ACTIVITY_LOG_CHUNK_SIZE = 200;
 const ACTIVITY_LOG_MAX_CHUNKS = 5000;
 const ACTIVITY_LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const CONTINUOUS_ALARM_NAME = 'emailReadAutomate.continuousLoop';
+const AUTO_START_ALARM_NAME = 'emailReadAutomate.autoStart';
+// Spread over 30-60s so profiles the launcher opened in quick succession do not
+// all load their mailboxes at the same moment.
+const AUTO_START_MIN_DELAY_SECONDS = 30;
+const AUTO_START_MAX_DELAY_SECONDS = 60;
+// Right after a laptop boots, Wi-Fi is often not connected yet, so an early
+// failure is usually transient. Retry a couple of times before giving up.
+const AUTO_START_MAX_ATTEMPTS = 3;
+const AUTO_START_RETRY_DELAY_MINUTES = 2;
 const DEFAULT_CONTINUOUS_DELAY_MINUTES = 10;
 const MIN_CONTINUOUS_DELAY_MINUTES = 1;
 const MAX_CONTINUOUS_DELAY_MINUTES = 240;
@@ -2636,6 +2645,10 @@ async function controlProviderAutomations(action, providers = []) {
 
   if (action === 'STOP') {
     await stopContinuousMode();
+    // A Stop pressed while Auto-start is still counting down must cancel it,
+    // or the run would start anyway seconds later. The Auto-start setting
+    // itself stays on for the next time Chrome opens.
+    await clearAutoStartAlarm();
     await setAutomationState('stopped', { providerAutomationStates });
     await clearProxyForStop();
   } else {
@@ -4490,8 +4503,103 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+async function logAutoStartEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+async function isAutoStartEnabled() {
+  const data = await getStorage(['autoStartOnBrowserStartup']);
+  // On unless someone has switched it off in the popup. "Never set" counts as
+  // on, so copies installed before this default existed switch on too.
+  return data.autoStartOnBrowserStartup !== false;
+}
+
+async function clearAutoStartAlarm() {
+  if (!chrome.alarms?.clear) return;
+  await chrome.alarms.clear(AUTO_START_ALARM_NAME).catch(() => false);
+}
+
+// Called from onStartup. This is an alarm, not a setTimeout, on purpose: Chrome
+// shuts down an idle MV3 service worker after ~30s and a pending setTimeout does
+// not keep it alive, so a 60s timer would simply never fire. An alarm survives
+// the worker being shut down and wakes it back up.
+async function scheduleAutoStartAfterBrowserStartup() {
+  await chrome.storage.local.set({ autoStartAttempt: 0 }).catch(() => {});
+  if (!chrome.alarms?.create) return;
+  if (!(await isAutoStartEnabled())) return;
+
+  const delaySeconds = randomInt(AUTO_START_MIN_DELAY_SECONDS, AUTO_START_MAX_DELAY_SECONDS);
+  await chrome.alarms.create(AUTO_START_ALARM_NAME, { delayInMinutes: delaySeconds / 60 });
+  await logAutoStartEvent(`[AutoStart] Chrome started. Automation will begin in ~${delaySeconds}s.`, 'info');
+}
+
+async function runAutoStart() {
+  // Re-read the flag: Auto-start may have been switched off while the alarm was
+  // pending.
+  if (!(await isAutoStartEnabled())) return;
+
+  // Continuous mode resuming, a manual Start, or an Inbox Lab job may already
+  // have started a run in this profile. Never start a second one on top of it.
+  await reclaimDeadAutomationState().catch(() => false);
+  const busyData = await getStorage(['automationState', 'providerAutomationStates']);
+  if (isAutomationBusyFromStorage(busyData) || await isAutomationSessionActive()) {
+    await chrome.storage.local.set({ autoStartAttempt: 0 }).catch(() => {});
+    await logAutoStartEvent('[AutoStart] Automation is already running in this profile; nothing to start.', 'info');
+    return;
+  }
+
+  const settings = getContinuousRunSettings(await getStoredAutomationSettings());
+  const providers = getSelectedProvidersFromSettings(settings);
+  if (!providers.length) {
+    await logAutoStartEvent('[AutoStart] No mail provider is selected in this profile, so nothing was started.', 'warn');
+    return;
+  }
+
+  const stored = await getStorage(['autoStartAttempt']);
+  const attempt = (parseInt(stored.autoStartAttempt, 10) || 0) + 1;
+  await chrome.storage.local.set({ autoStartAttempt: attempt }).catch(() => {});
+
+  await logAutoStartEvent(
+    `[AutoStart] Starting automation for ${providers.map(getProviderLabel).join(', ')}${attempt > 1 ? ` (attempt ${attempt}/${AUTO_START_MAX_ATTEMPTS})` : ''}.`,
+    'success'
+  );
+
+  try {
+    // The same entry point the popup's Start button uses; the engine is untouched.
+    await startAutomationEntryPoint(settings);
+    await chrome.storage.local.set({ autoStartAttempt: 0 }).catch(() => {});
+  } catch (error) {
+    await handleAutomationStartFailure(error, providers).catch(() => {});
+
+    if (attempt < AUTO_START_MAX_ATTEMPTS) {
+      await chrome.alarms.create(AUTO_START_ALARM_NAME, { delayInMinutes: AUTO_START_RETRY_DELAY_MINUTES });
+      await logAutoStartEvent(
+        `[AutoStart] Start failed: ${error.message}. Retrying in ${AUTO_START_RETRY_DELAY_MINUTES} minutes.`,
+        'warn'
+      );
+      return;
+    }
+
+    await chrome.storage.local.set({ autoStartAttempt: 0 }).catch(() => {});
+    await logAutoStartEvent(
+      `[AutoStart] Start failed after ${AUTO_START_MAX_ATTEMPTS} attempts: ${error.message}. Start this profile manually.`,
+      'error'
+    );
+  }
+}
+
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === AUTO_START_ALARM_NAME) {
+      runAutoStart().catch(error => {
+        logAutoStartEvent(`[AutoStart] Failed: ${error.message}`, 'error').catch(() => {});
+      });
+      return;
+    }
+
     if (alarm.name === CONTINUOUS_ALARM_NAME) {
       startContinuousAutomationCycle().catch(error => {
         logContinuousEvent(`[Continuous] Alarm failed: ${error.message}`, 'error').catch(() => {});
@@ -4554,6 +4662,7 @@ chrome.runtime.onInstalled.addListener(details => {
       autoRefresh: true,
       enableContinuousMode: false,
       continuousDelayMinutes: DEFAULT_CONTINUOUS_DELAY_MINUTES,
+      autoStartOnBrowserStartup: true,
       randomEmailOpening: false,
       retryEmailOpening: true,
       manualActivityPause: true,
@@ -4628,6 +4737,10 @@ chrome.runtime.onInstalled.addListener(details => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  // Opt-in: only does anything when Auto-start is on in this profile's popup.
+  scheduleAutoStartAfterBrowserStartup().catch(error => {
+    console.warn('[AutoStart] Scheduling failed', error);
+  });
   releaseOrphanedAutomationState().catch(error => {
     console.warn('[State] Orphan release failed', error);
   });
