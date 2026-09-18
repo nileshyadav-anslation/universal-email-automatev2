@@ -88,6 +88,9 @@ const DEFAULT_AUTOMATION_SETTINGS = {
   enableAccountSwitching: false,
   enableProxyManager: false,
   allowProxyFallback: false,
+  // Empty = no date limit. "YYYY-MM-DD", straight from <input type="date">.
+  processFromDate: '',
+  processToDate: '',
   proxyApplyMode: 'off',
   globalProxyId: '',
   selectedAccounts: []
@@ -119,6 +122,8 @@ const AUTOMATION_SETTING_STORAGE_KEYS = [
   'enableAccountSwitching',
   'enableProxyManager',
   'allowProxyFallback',
+  'processFromDate',
+  'processToDate',
   'proxyApplyMode',
   'globalProxyId',
   'selectedAccounts',
@@ -372,10 +377,53 @@ function queueActivityLogWrite(task) {
   return activityLogWriteChain;
 }
 
+// Which proxy the automation is routing through right now, so every log line
+// written while it is live can say which IP the mail was opened from. Held in
+// memory and stamped at write time: reading storage on every log entry would
+// cost a round trip per line.
+let activeProxyLogContext = null;
+let activeProxyLogContextHydrated = false;
+
+function setActiveProxyLogContext(context) {
+  activeProxyLogContext = context || null;
+  activeProxyLogContextHydrated = true;
+}
+
+// The MV3 service worker restarts constantly. After a restart the in-memory
+// context is empty even though a proxy is still applied, so recover it once
+// from the state ProxyController persists.
+async function hydrateActiveProxyLogContext() {
+  if (activeProxyLogContextHydrated) return activeProxyLogContext;
+  activeProxyLogContextHydrated = true;
+
+  const state = await globalThis.ProxyController?.getActiveProxyState?.().catch(() => null);
+  if (state?.proxyId) {
+    activeProxyLogContext = {
+      proxyId: state.proxyId,
+      label: state.host ? `${state.host}:${state.port}` : state.proxyId,
+      ip: state.ip || '',
+      account: ''
+    };
+  }
+
+  return activeProxyLogContext;
+}
+
 async function addActivityLogEntry(message, level = 'info') {
   if (!message) return;
 
   const entry = { message: String(message), level, time: Date.now() };
+  const proxy = await hydrateActiveProxyLogContext().catch(() => null);
+
+  if (proxy?.proxyId) {
+    entry.proxy = {
+      id: proxy.proxyId,
+      label: proxy.label || '',
+      ip: proxy.ip || '',
+      account: proxy.account || ''
+    };
+  }
+
   await queueActivityLogWrite(() => appendActivityLogEntries([entry]));
 }
 
@@ -384,6 +432,8 @@ function activityLogEntryMatches(entry, filters = {}) {
   if (Number.isFinite(filters.fromTime) && time < filters.fromTime) return false;
   if (Number.isFinite(filters.toTime) && time > filters.toTime) return false;
   if (filters.level && filters.level !== 'all' && (entry.level || 'info') !== filters.level) return false;
+  // "Proxy only" view: entries written while no proxy was live are hidden.
+  if (filters.proxyOnly && !entry.proxy?.id) return false;
   if (filters.search) {
     if (!String(entry.message || '').toLowerCase().includes(filters.search)) return false;
   }
@@ -396,14 +446,15 @@ function activityLogChunkInWindow(chunk, fromTime, toTime) {
   return true;
 }
 
-async function readActivityLog({ cursor = null, limit = 100, fromTime, toTime, level, search } = {}) {
+async function readActivityLog({ cursor = null, limit = 100, fromTime, toTime, level, search, proxyOnly = false } = {}) {
   await activityLogWriteChain.catch(() => {});
 
   const filters = {
     fromTime: Number.isFinite(fromTime) ? fromTime : undefined,
     toTime: Number.isFinite(toTime) ? toTime : undefined,
     level: level || 'all',
-    search: search ? String(search).toLowerCase().trim() : ''
+    search: search ? String(search).toLowerCase().trim() : '',
+    proxyOnly: Boolean(proxyOnly)
   };
 
   const meta = await readActivityLogMeta();
@@ -1613,10 +1664,40 @@ async function prepareProxyForAccount(account, settings = {}) {
     };
   }
 
-  return globalThis.ProxyManager.applyForAccount(account, {
+  const result = await globalThis.ProxyManager.applyForAccount(account, {
     allowFallback: Boolean(settings.allowProxyFallback),
     log: logProxyEvent
   });
+
+  await recordProxyLogContext(result, account);
+  return result;
+}
+
+// Names the account/proxy pairing once, then leaves the context in place so
+// every later log line (including per-email lines relayed from the content
+// script) is attributed to the proxy that opened them.
+async function recordProxyLogContext(result = {}, account = null) {
+  if (!result.ok || !result.applied || !result.proxy) {
+    if (result.fallback) setActiveProxyLogContext(null);
+    return;
+  }
+
+  const proxy = result.proxy;
+  const label = proxy.host ? `${proxy.host}:${proxy.port}` : (proxy.id || '');
+  const location = [proxy.city, proxy.country].filter(Boolean).join(', ');
+  const accountLabel = account ? (account.label || account.id || '') : '';
+
+  setActiveProxyLogContext({
+    proxyId: proxy.id,
+    label,
+    ip: proxy.lastKnownIp || '',
+    account: accountLabel
+  });
+
+  await logProxyEvent(
+    `[Proxy] ${accountLabel || 'All tabs'} -> ${label}${location ? ` (${location})` : ''} | exit IP ${proxy.lastKnownIp || 'unknown'}`,
+    'success'
+  );
 }
 
 async function prepareGlobalProxy(settings = {}) {
@@ -1637,7 +1718,10 @@ async function prepareGlobalProxy(settings = {}) {
     log: logProxyEvent
   });
 
-  if (result.ok) return result;
+  if (result.ok) {
+    await recordProxyLogContext(result, null);
+    return result;
+  }
 
   await logProxyEvent('[Proxy] Proxy failed', 'error');
   if (settings.allowProxyFallback) {
@@ -1655,6 +1739,8 @@ async function prepareGlobalProxy(settings = {}) {
 }
 
 async function clearProxyForStop() {
+  setActiveProxyLogContext(null);
+
   if (!isProxyManagerAvailable()) return;
 
   await globalThis.ProxyManager.clearProxy().catch(error => {
@@ -4292,7 +4378,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       fromTime: message.fromTime,
       toTime: message.toTime,
       level: message.level,
-      search: message.search
+      search: message.search,
+      proxyOnly: message.proxyOnly
     })
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message, entries: [], hasMore: false }));

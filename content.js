@@ -15,6 +15,10 @@
     gmail: {
       host: "mail.google.com",
 
+      // Gmail's date cell carries the full date in title=, e.g.
+      // "Thu, Sep 18, 2026, 1:44 PM". The visible text is relative.
+      dateSelectors: ["td.xW span[title]", "span.xW span[title]", "td.xY span[title]"],
+
       unreadSelectors: ["tr.zA.zE", "tr.zE", "[data-thread-id].zE"],
 
       subjectSelectors: [".y6 span", ".bog"],
@@ -30,6 +34,12 @@
     },
     outlook: {
   host: "outlook.live.com",
+
+  dateSelectors: [
+    '[data-testid="SentReceivedSavedTime"]',
+    'span[title*=":"]',
+    '[id$="_RECEIVED"]',
+  ],
 
   unreadSelectors: [
     '[role="option"][data-convid][aria-label*="Unread"]',
@@ -83,6 +93,9 @@
 
 proton: {
   host: "mail.proton.me",
+
+  // Proton renders a real <time datetime="..."> element - the cleanest of the five.
+  dateSelectors: ['time[datetime]', 'time', '[data-testid="message-row:sent-time"]'],
 
   // Read off a live logged-in Proton tab. A row is
   // div.item-container.item-container--row and carries data-element-id, which
@@ -182,6 +195,8 @@ zoho: {
 
     yahoo: {
       host: "mail.yahoo.com",
+
+      dateSelectors: ['[data-test-id="message-date"]', "time[datetime]", "time"],
 
       // ✅ Target the unread dot/indicator inside list items, not the row itself
       // unreadSelectors: [
@@ -284,6 +299,16 @@ zoho: {
 
     aol: {
       host: "mail.aol.com",
+
+      // AOL's newer /f/ UI drops every data-test-id but keeps a semantic class
+      // on the date cell. Read off a live AOL inbox.
+      dateSelectors: [
+        "span.w-message-list-date-column",
+        ".w-message-list-date-column",
+        '[data-test-id="message-date"]',
+        "time[datetime]",
+        "time",
+      ],
 
       // AOL uses same codebase as Yahoo
       // unreadSelectors: [
@@ -399,6 +424,9 @@ zoho: {
     selectedAccounts: [],
     currentAccountIndex: 0,
     sessionOpened: 0,
+    // Empty = no date limit. "YYYY-MM-DD" as produced by <input type="date">.
+    processFromDate: "",
+    processToDate: "",
   };
   let automationTimeout = null;
   let processedHrefs = new Set();
@@ -854,7 +882,281 @@ zoho: {
     return element.offsetParent !== null;
   }
 
+  // ── Date range filter ──────────────────────────────────────────────────────
+  // Optional. When the user picks a From/To date, rows outside that window are
+  // left unread instead of being opened.
+  //
+  // Everything here FAILS OPEN: a row whose date cannot be read is processed
+  // normally. Mail providers change their markup constantly, and silently
+  // skipping every email because a selector moved would look identical to the
+  // automation being broken.
+
+  let dateRangeSkipCount = 0;
+  let dateRangeUnknownCount = 0;
+  // Is a numeric date day-first (18/09/2026) or month-first (09/18/2026)?
+  //
+  // The browser locale is NOT the answer: Outlook renders dates using the
+  // mailbox's own regional setting, so a Chrome running en-US happily shows
+  // "18/09/2026". Measured on a live Outlook inbox.
+  //
+  // Instead the order is inferred from the mailbox itself. Any date on the page
+  // with a first or second number above 12 settles it for every other date in
+  // the list, because one mailbox renders them all the same way.
+  // null = not yet known.
+  let numericDateDayFirst = null;
+
+  const NUMERIC_DATE_RE = /(?:^|\s)(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})(?:\s|$)/;
+
+  function learnNumericDateOrder(values = []) {
+    if (numericDateDayFirst !== null) return numericDateDayFirst;
+
+    for (const value of values) {
+      const match = String(value || "").match(NUMERIC_DATE_RE);
+      if (!match) continue;
+
+      const first = parseInt(match[1], 10);
+      const second = parseInt(match[2], 10);
+
+      if (first > 12 && second <= 12) return (numericDateDayFirst = true);
+      if (second > 12 && first <= 12) return (numericDateDayFirst = false);
+    }
+
+    return null;
+  }
+
+  // Only used when the mailbox gave us nothing unambiguous to learn from.
+  function localeIsDayFirst() {
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, {
+        day: "numeric",
+        month: "numeric",
+        year: "numeric",
+      }).formatToParts(new Date(2000, 0, 2));
+      const dayIndex = parts.findIndex((part) => part.type === "day");
+      const monthIndex = parts.findIndex((part) => part.type === "month");
+      return dayIndex > -1 && monthIndex > -1 && dayIndex < monthIndex;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function parseRowDateValue(value) {
+    // Proton's title reads "Saturday, September 12th, 2026 at 5:30 PM"; the
+    // ordinal suffix alone makes Date.parse return NaN.
+    const text = String(value || "")
+      .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+      .replace(/\bat\b/gi, " ")
+      .trim();
+    if (!text) return null;
+
+    // A bare clock time ("1:44 PM") is how every provider renders "today".
+    if (/^\d{1,2}:\d{2}(\s*[AaPp][Mm])?$/.test(text)) {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    }
+
+    // "Sep 11" / "11 Sep" carry no year and mean the current one. This has to
+    // be handled BEFORE Date.parse, which reads the day number as a year and
+    // silently returns 2001 for "Sep 11".
+    if (!/\d{4}/.test(text)) {
+      const monthDay = text.match(/^([A-Za-z]{3,9})\s+(\d{1,2})$/);
+      const dayMonth = text.match(/^(\d{1,2})\s+([A-Za-z]{3,9})$/);
+      const month = monthDay ? monthDay[1] : (dayMonth ? dayMonth[2] : "");
+      const day = monthDay ? monthDay[2] : (dayMonth ? dayMonth[1] : "");
+      if (!month || !day) return null;
+
+      const withYear = Date.parse(`${month} ${day}, ${new Date().getFullYear()}`);
+      return Number.isNaN(withYear) ? null : new Date(withYear);
+    }
+
+    // Numeric dates ("Fri 18/09/2026 12:46" in Outlook) must never go through
+    // Date.parse: it always reads them as MM/DD/YYYY, so a UK/IN-formatted
+    // 02/09/2026 comes back as 9 February instead of 2 September. Wrong dates
+    // are worse than no dates - they silently filter the wrong emails.
+    const numeric = text.match(NUMERIC_DATE_RE);
+    if (numeric) {
+      const a = parseInt(numeric[1], 10);
+      const b = parseInt(numeric[2], 10);
+      const year = parseInt(numeric[3], 10);
+
+      let day = a;
+      let month = b;
+
+      if (a > 12 && b <= 12) {
+        day = a;
+        month = b;
+      } else if (b > 12 && a <= 12) {
+        day = b;
+        month = a;
+      } else {
+        // Genuinely ambiguous (both <= 12). Use what the mailbox's other rows
+        // already told us, and only fall back to the browser locale if this
+        // list had nothing unambiguous in it.
+        const dayFirst = numericDateDayFirst !== null ? numericDateDayFirst : localeIsDayFirst();
+        day = dayFirst ? a : b;
+        month = dayFirst ? b : a;
+      }
+
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      return new Date(year, month - 1, day);
+    }
+
+    // Anything else carrying a real year: ISO (Proton's <time datetime>) or the
+    // provider's own wording ("Thu, Sep 18, 2026, 1:44 PM").
+    const parsed = Date.parse(text);
+    return Number.isNaN(parsed) ? null : new Date(parsed);
+  }
+
+  function getRowDate(row) {
+    return parseRowDateValue(getRowDateRaw(row));
+  }
+
+  // Returns the raw date string, not a Date, so the order detector can look at
+  // a whole list of them before anything is parsed.
+  function getRowDateRaw(row) {
+    if (!row) return "";
+
+    const selectors = Array.isArray(provider?.dateSelectors) ? provider.dateSelectors : [];
+
+    for (const selector of selectors) {
+      let element = null;
+      try {
+        element = row.querySelector(selector);
+      } catch (error) {
+        continue;
+      }
+      if (!element) continue;
+
+      // Attributes hold the absolute date; the visible text is usually relative.
+      const candidates = [
+        element.getAttribute("datetime"),
+        element.getAttribute("title"),
+        element.getAttribute("aria-label"),
+        element.textContent,
+      ];
+
+      for (const candidate of candidates) {
+        const text = String(candidate || "").trim();
+        if (text && parseRowDateValue(text)) return text;
+      }
+    }
+
+    // Some providers put the date in the row's own aria-label.
+    const rowLabel = row.getAttribute?.("aria-label") || "";
+    const labelMatch = rowLabel.match(/\b\d{1,2}\s+\w{3,9}\s+\d{4}\b|\b\w{3,9}\s+\d{1,2},\s*\d{4}\b/);
+    if (labelMatch) return labelMatch[0];
+
+    // Last resort, and the only thing that works on Yahoo: its date cell is a
+    // bare <div>27 Aug</div> with build-generated classes and no title, testid
+    // or <time> to hook onto. Scan the row's leaf nodes for the one whose whole
+    // text is a date. Measured on a live Yahoo inbox.
+    return findDateTextInRow(row);
+  }
+
+  // Deliberately anchored (^...$) so it only matches a cell that is *nothing
+  // but* a date - a subject line containing "Jun 23" must not be mistaken for
+  // the row's timestamp.
+  const DATE_TEXT_RE = /^(\d{1,2}:\d{2}(\s*[AaPp]\.?[Mm]\.?)?|\d{1,2}\s+[A-Za-z]{3,9}|[A-Za-z]{3,9}\s+\d{1,2}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})$/;
+
+  function findDateTextInRow(row) {
+    let leaves = [];
+    try {
+      leaves = row.querySelectorAll("span, div, td, time");
+    } catch (error) {
+      return "";
+    }
+
+    for (const leaf of leaves) {
+      if (leaf.children.length) continue;
+      const text = (leaf.textContent || "").trim();
+      if (text.length > 24 || !DATE_TEXT_RE.test(text)) continue;
+      if (parseRowDateValue(text)) return text;
+    }
+
+    return "";
+  }
+
+  function getDateRangeBounds() {
+    const from = settings.processFromDate
+      ? new Date(`${settings.processFromDate}T00:00:00`)
+      : null;
+    const to = settings.processToDate
+      ? new Date(`${settings.processToDate}T23:59:59.999`)
+      : null;
+
+    return {
+      from: from && !Number.isNaN(from.getTime()) ? from.getTime() : null,
+      to: to && !Number.isNaN(to.getTime()) ? to.getTime() : null,
+    };
+  }
+
+  function dateRangeIsActive() {
+    const { from, to } = getDateRangeBounds();
+    return from !== null || to !== null;
+  }
+
+  function isRowInDateRange(row) {
+    const { from, to } = getDateRangeBounds();
+    if (from === null && to === null) return true;
+
+    const date = getRowDate(row);
+    if (!date) {
+      dateRangeUnknownCount += 1;
+      return true; // fail open
+    }
+
+    const time = date.getTime();
+    if (from !== null && time < from) return false;
+    if (to !== null && time > to) return false;
+    return true;
+  }
+
+  function applyDateRangeFilter(rows = []) {
+    if (!dateRangeIsActive() || !rows.length) return rows;
+
+    // Let the mailbox tell us its own date order before parsing anything, so an
+    // ambiguous "02/09/2026" is read the way this list rendered it.
+    learnNumericDateOrder(rows.map(getRowDateRaw));
+
+    const kept = rows.filter(isRowInDateRange);
+    dateRangeSkipCount += rows.length - kept.length;
+    return kept;
+  }
+
+  function describeDateRange() {
+    const from = settings.processFromDate || "";
+    const to = settings.processToDate || "";
+    if (from && to) return from === to ? from : `${from} to ${to}`;
+    if (from) return `from ${from}`;
+    return `up to ${to}`;
+  }
+
+  // Reported once per pass rather than per row, so a 200-email inbox does not
+  // produce 200 log lines.
+  function flushDateRangeLog() {
+    if (dateRangeSkipCount > 0) {
+      log(
+        `Date filter (${describeDateRange()}): skipped ${dateRangeSkipCount} email(s) outside the range.`,
+        "info"
+      );
+    }
+
+    if (dateRangeUnknownCount > 0) {
+      log(
+        `Date filter: could not read the date on ${dateRangeUnknownCount} email(s); those were processed anyway.`,
+        "warn"
+      );
+    }
+
+    dateRangeSkipCount = 0;
+    dateRangeUnknownCount = 0;
+  }
+
   function getUnreadRows() {
+    return applyDateRangeFilter(getUnreadRowsRaw());
+  }
+
+  function getUnreadRowsRaw() {
     if (!provider) return [];
 
     for (const sel of provider.unreadSelectors) {
@@ -3251,6 +3553,7 @@ zoho: {
           }
 
           if ((isYahooProvider() || isAolProvider() || isOutlookProvider() || isProtonProvider()) && mailboxLabel === "Spam") {
+            flushDateRangeLog();
             log(`Finished ${mailboxLabel}.`, "success");
             break;
           }
@@ -3295,11 +3598,13 @@ zoho: {
                   continue;
                 }
               }
-              log(`Finished ${mailboxLabel}.`, "success");
+              flushDateRangeLog();
+            log(`Finished ${mailboxLabel}.`, "success");
               break;
             }
 
           } else {
+            flushDateRangeLog();
             log(`Finished ${mailboxLabel}.`, "success");
             break;
           }

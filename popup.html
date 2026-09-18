@@ -172,6 +172,25 @@
                 </div>
               </div>
 
+              <!-- Blank = every unread email, the original behaviour. -->
+              <div class="setting-row setting-row-stack">
+                <div class="setting-info">
+                  <span class="setting-name">Email Date Range</span>
+                  <span class="setting-desc">Only process emails received between these dates. Leave blank for all.</span>
+                </div>
+                <div class="setting-control setting-control-dates">
+                  <label class="log-date-field">
+                    <span>From</span>
+                    <input type="date" id="processFromDate" class="batch-select" aria-label="Process emails from date" />
+                  </label>
+                  <label class="log-date-field">
+                    <span>To</span>
+                    <input type="date" id="processToDate" class="batch-select" aria-label="Process emails to date" />
+                  </label>
+                  <button class="btn settings-action" id="btnClearProcessDates" type="button">Clear</button>
+                </div>
+              </div>
+
               <div class="setting-row">
                 <div class="setting-info">
                   <span class="setting-name">Auto Refresh</span>
@@ -1130,6 +1149,18 @@
                   <input type="date" id="logToDate" class="batch-select" aria-label="To date" />
                 </label>
                 <button class="btn settings-action" id="btnClearLogFilters" type="button">Reset</button>
+              </div>
+              <!-- Shown only while Proxy Manager is on: limits the view to
+                   lines produced while a proxy was actually routing. -->
+              <div class="log-filter-row" id="logProxyOnlyField" hidden>
+                <label class="log-proxy-only">
+                  <span>Proxy log only</span>
+                  <span class="log-proxy-only-hint">Show only emails opened through a proxy</span>
+                </label>
+                <label class="toggle">
+                  <input type="checkbox" id="logProxyOnlyToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
               </div>
             </div>
 

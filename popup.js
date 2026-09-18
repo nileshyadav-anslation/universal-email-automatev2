@@ -30,6 +30,8 @@ const btnClearLogs = $('btnClearLogs');
 const btnLoadOlderLogs = $('btnLoadOlderLogs');
 const logLevelFilter = $('logLevelFilter');
 const logSearchInput = $('logSearchInput');
+const logProxyOnlyToggle = $('logProxyOnlyToggle');
+const logProxyOnlyField = $('logProxyOnlyField');
 const logFromDate = $('logFromDate');
 const logToDate = $('logToDate');
 const btnClearLogFilters = $('btnClearLogFilters');
@@ -48,6 +50,9 @@ const gmailPromotionsToggle = $('gmailPromotionsToggle');
 const gmailPromotionsPageLimitInput = $('gmailPromotionsPageLimitInput');
 const gmailInboxPageLimitInput = $('gmailInboxPageLimitInput');
 const maxEmailsInput = $('maxEmailsInput');
+const processFromDateInput = $('processFromDate');
+const processToDateInput = $('processToDate');
+const btnClearProcessDates = $('btnClearProcessDates');
 const enableAccountSwitchingToggle = $('enableAccountSwitchingToggle');
 const accountSelectionRow = $('accountSelectionRow');
 const accountList = $('accountList');
@@ -245,38 +250,40 @@ function getLogFilters() {
     level: logLevelFilter ? logLevelFilter.value || 'all' : 'all',
     search: logSearchInput ? logSearchInput.value.trim().toLowerCase() : '',
     fromTime: dateInputToFromTime(logFromDate ? logFromDate.value : ''),
-    toTime: dateInputToToTime(logToDate ? logToDate.value : '')
+    toTime: dateInputToToTime(logToDate ? logToDate.value : ''),
+    proxyOnly: Boolean(logProxyOnlyToggle && logProxyOnlyToggle.checked)
   };
 }
 
 function logFiltersAreActive(f = activeLogFilters) {
   return (f.level && f.level !== 'all') || Boolean(f.search) ||
-    Number.isFinite(f.fromTime) || Number.isFinite(f.toTime);
+    Number.isFinite(f.fromTime) || Number.isFinite(f.toTime) || Boolean(f.proxyOnly);
 }
 
-function liveEntryMatchesActiveFilter(type, timestamp, msg) {
+function liveEntryMatchesActiveFilter(type, timestamp, msg, proxy = null) {
   const f = activeLogFilters;
   if (!logFiltersAreActive(f)) return true;
   if (f.level && f.level !== 'all' && (type || 'info') !== f.level) return false;
   if (Number.isFinite(f.fromTime) && timestamp < f.fromTime) return false;
   if (Number.isFinite(f.toTime) && timestamp > f.toTime) return false;
+  if (f.proxyOnly && !proxy?.id) return false;
   if (f.search && !String(msg || '').toLowerCase().includes(f.search)) return false;
   return true;
 }
 
-function renderLogEntry(msg, type = 'info', timestamp = Date.now()) {
+function renderLogEntry(msg, type = 'info', timestamp = Date.now(), proxy = null) {
   // When a filter is active, don't let non-matching live entries pollute the view.
-  if (!liveEntryMatchesActiveFilter(type, timestamp, msg)) return;
+  if (!liveEntryMatchesActiveFilter(type, timestamp, msg, proxy)) return;
   logEmpty.style.display = 'none';
-  logScroll.prepend(buildLogEntryElement(msg, type, timestamp));
+  logScroll.prepend(buildLogEntryElement(msg, type, timestamp, proxy));
   while (logScroll.children.length > MAX_RENDERED_LOG_ENTRIES) {
     logScroll.removeChild(logScroll.lastChild);
   }
 }
 
-function renderLogEntryBottom(msg, type = 'info', timestamp = Date.now()) {
+function renderLogEntryBottom(msg, type = 'info', timestamp = Date.now(), proxy = null) {
   logEmpty.style.display = 'none';
-  logScroll.append(buildLogEntryElement(msg, type, timestamp));
+  logScroll.append(buildLogEntryElement(msg, type, timestamp, proxy));
 }
 
 function persistLogEntry(msg, type = 'info') {
@@ -340,7 +347,7 @@ function loadActivityLogs() {
     }
 
     entries.forEach((entry) => {
-      renderLogEntry(entry.message, entry.level || 'info', entry.time || Date.now());
+      renderLogEntry(entry.message, entry.level || 'info', entry.time || Date.now(), entry.proxy || null);
     });
   });
 }
@@ -354,6 +361,7 @@ function applyLogFilters() {
 function clearLogFilters() {
   if (logLevelFilter) logLevelFilter.value = 'all';
   if (logSearchInput) logSearchInput.value = '';
+  if (logProxyOnlyToggle) logProxyOnlyToggle.checked = false;
   if (logFromDate) logFromDate.value = '';
   if (logToDate) logToDate.value = '';
   applyLogFilters();
@@ -373,7 +381,7 @@ async function loadOlderLogs() {
     if (!result?.ok || !Array.isArray(result.entries)) return;
 
     [...result.entries].reverse().forEach((entry) => {
-      renderLogEntryBottom(entry.message, entry.level || 'info', entry.time || Date.now());
+      renderLogEntryBottom(entry.message, entry.level || 'info', entry.time || Date.now(), entry.proxy || null);
     });
     logCursor = result.cursor ?? logCursor;
     logHasMore = Boolean(result.hasMore);
@@ -1006,6 +1014,35 @@ if (btnCopyLogs) btnCopyLogs.addEventListener('click', copyActivityLogs);
 btnClearLogs.addEventListener('click', clearActivityLogs);
 btnLoadOlderLogs.addEventListener('click', loadOlderLogs);
 if (logLevelFilter) logLevelFilter.addEventListener('change', applyLogFilters);
+if (logProxyOnlyToggle) logProxyOnlyToggle.addEventListener('change', applyLogFilters);
+
+// Email date range. Saved like any other setting; a running automation picks
+// the new range up on its next pass.
+function onProcessDateChanged() {
+  const { from, to } = getProcessDateRange();
+  saveSettings();
+
+  if (!from && !to) {
+    log('Date range cleared. All unread emails will be processed.', 'info');
+    return;
+  }
+
+  const range = from && to
+    ? (from === to ? from : `${from} to ${to}`)
+    : (from ? `from ${from}` : `up to ${to}`);
+  log(`Date range set: only emails ${range} will be processed.`, 'success');
+}
+
+if (processFromDateInput) processFromDateInput.addEventListener('change', onProcessDateChanged);
+if (processToDateInput) processToDateInput.addEventListener('change', onProcessDateChanged);
+
+if (btnClearProcessDates) {
+  btnClearProcessDates.addEventListener('click', () => {
+    if (processFromDateInput) processFromDateInput.value = '';
+    if (processToDateInput) processToDateInput.value = '';
+    onProcessDateChanged();
+  });
+}
 if (logFromDate) logFromDate.addEventListener('change', applyLogFilters);
 if (logToDate) logToDate.addEventListener('change', applyLogFilters);
 if (btnClearLogFilters) btnClearLogFilters.addEventListener('click', clearLogFilters);
@@ -1147,6 +1184,8 @@ function applySettingsToControls(templateSettings = {}) {
   gmailPromotionsPageLimitInput.value = validateGmailPromotionsPageLimit(merged.gmailPromotionsPageLimit);
   gmailInboxPageLimitInput.value = validateGmailInboxPageLimit(merged.gmailInboxPageLimit);
   maxEmailsInput.value = validateMaxEmails(merged.maxEmails);
+  if (processFromDateInput) processFromDateInput.value = normalizeProcessDate(merged.processFromDate);
+  if (processToDateInput) processToDateInput.value = normalizeProcessDate(merged.processToDate);
   maxLinksPerEmailInput.value = validateMaxLinksPerEmail(merged.maxLinksPerEmail);
   enableLinkOpeningToggle.checked = Boolean(merged.enableLinkOpening);
   enableAutoReplyToggle.checked = Boolean(merged.enableAutoReply);
@@ -1225,6 +1264,28 @@ function deleteSelectedAutomationTemplate() {
   });
 }
 
+// "YYYY-MM-DD" or "". Anything else is treated as no limit.
+function normalizeProcessDate(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
+// A From later than To would match nothing and look like broken automation,
+// so the two are swapped rather than silently yielding an empty inbox.
+function getProcessDateRange() {
+  let from = normalizeProcessDate(processFromDateInput ? processFromDateInput.value : '');
+  let to = normalizeProcessDate(processToDateInput ? processToDateInput.value : '');
+
+  if (from && to && from > to) {
+    [from, to] = [to, from];
+    if (processFromDateInput) processFromDateInput.value = from;
+    if (processToDateInput) processToDateInput.value = to;
+    log('Date range was reversed, so From and To have been swapped.', 'warn');
+  }
+
+  return { from, to };
+}
+
 function getCurrentSettings() {
   const maxEmails = validateMaxEmails(maxEmailsInput.value);
   const maxLinksPerEmail = validateMaxLinksPerEmail(maxLinksPerEmailInput.value);
@@ -1247,7 +1308,11 @@ function getCurrentSettings() {
   backendTokenInput.value = backendConnector.backendToken;
   backendAccountInput.value = backendConnector.backendAccount;
 
+  const processDates = getProcessDateRange();
+
   return {
+    processFromDate: processDates.from,
+    processToDate: processDates.to,
     selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
     selectedProviders: getSelectedProviders(),
     backendBaseUrl: backendConnector.backendBaseUrl,
@@ -2107,6 +2172,18 @@ async function loadProxyManagerUi() {
   ]);
 
   activeProxyState = activeProxy || null;
+
+  // The proxy-only log view is meaningless with Proxy Manager off, so it only
+  // appears once proxies are actually in play.
+  if (logProxyOnlyField) {
+    const proxyInUse = Boolean(proxySettings.enabled);
+    logProxyOnlyField.hidden = !proxyInUse;
+
+    if (!proxyInUse && logProxyOnlyToggle && logProxyOnlyToggle.checked) {
+      logProxyOnlyToggle.checked = false;
+      applyLogFilters();
+    }
+  }
 
   proxyManagerToggle.checked = Boolean(proxySettings.enabled);
   proxyFallbackToggle.checked = Boolean(proxySettings.allowFallback);

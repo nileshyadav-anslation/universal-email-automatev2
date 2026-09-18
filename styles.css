@@ -876,6 +876,77 @@ input[type="radio"] {
   font-weight: 800;
 }
 
+/* Two date inputs plus a button will not fit beside a label in a 380px popup,
+   so this row stacks: description on top, controls full width underneath. */
+.setting-row-stack .setting-control {
+  justify-content: flex-start;
+  flex-shrink: 1;
+  width: 100%;
+}
+
+.setting-control-dates {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+/* "From"/"To" sit above their input rather than beside it, which buys back the
+   ~50px the inline labels were costing. */
+.setting-control-dates .log-date-field {
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.setting-control-dates input[type="date"] {
+  width: 100%;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 4px;
+}
+
+.setting-control-dates .settings-action {
+  flex-shrink: 0;
+  min-height: 28px;
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+/* Which proxy a log line was produced through. */
+.log-proxy {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-proxy-only {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-right: auto;
+}
+
+.log-proxy-only-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+#logProxyOnlyField {
+  align-items: center;
+}
+
 /* Active = Chrome is routing through this proxy right now. */
 .proxy-status-online,
 .proxy-status-active {
