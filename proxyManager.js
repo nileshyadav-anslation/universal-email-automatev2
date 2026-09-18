@@ -22,7 +22,40 @@
   }
 
   function getProxyFailureStatus(error = "") {
-    return String(error).toLowerCase().includes("auth") ? "Auth Failed" : "Offline";
+    const text = String(error).toLowerCase();
+    if (text.includes("auth")) return "Auth Failed";
+    if (text.includes("not applied") || text.includes("direct ip")) return "Not Applied";
+    return "Offline";
+  }
+
+  // Measured before the proxy goes on, so verifyCurrentIp can tell a real proxy
+  // IP from the machine's own. Never fatal: without it we simply fall back to
+  // the old, weaker "did the IP check succeed" test.
+  //
+  // `clean` clears any active proxy first for a guaranteed-real reading. Only
+  // callers that are about to apply a proxy anyway, and that are not running
+  // inside a live automation session, may pass it.
+  async function captureBaselineIp(options = {}) {
+    const checker = globalThis.ProxyHealthChecker;
+
+    if (options.clean && typeof checker?.measureDirectIpNow === "function") {
+      return checker.measureDirectIpNow().catch(() => "");
+    }
+
+    if (typeof checker?.getDirectIp !== "function") return "";
+    return checker.getDirectIp().catch(() => "");
+  }
+
+  async function verifyProxy(proxy, baselineIp) {
+    const health = await globalThis.ProxyHealthChecker.verifyCurrentIp(proxy, { baselineIp });
+
+    // Record the verified exit IP against the live proxy so the popup can show
+    // what Chrome is actually routing through, not just a past test result.
+    if (health.ok && health.ip) {
+      await globalThis.ProxyController?.setActiveProxyState?.(proxy, health.ip);
+    }
+
+    return health;
   }
 
   function validateProxy(proxy, account) {
@@ -92,6 +125,7 @@
     }
 
     const proxies = assigned.proxies;
+    const baselineIp = await captureBaselineIp();
     let lastError = "";
 
     for (let index = 0; index < proxies.length; index += 1) {
@@ -110,12 +144,13 @@
       try {
         emit(options, `[Proxy] Applying proxy ${index + 1}/${proxies.length}`, "info");
         await globalThis.ProxyController.applyProxy(proxy);
-        const health = await globalThis.ProxyHealthChecker.verifyCurrentIp(proxy);
+        const health = await verifyProxy(proxy, baselineIp);
         await updateProxyHealth(proxy, health);
 
         if (!health.ok) {
           lastError = health.error || "Proxy IP verification failed";
           console.log("[Proxy] Proxy failed", lastError);
+          emit(options, `[Proxy] ${lastError}`, "error");
           await globalThis.ProxyController.clearProxy().catch(() => null);
 
           if (index < proxies.length - 1) {
@@ -170,11 +205,13 @@
     }
 
     try {
+      const baselineIp = await captureBaselineIp();
       await globalThis.ProxyController.applyProxy(proxy);
-      const health = await globalThis.ProxyHealthChecker.verifyCurrentIp(proxy);
+      const health = await verifyProxy(proxy, baselineIp);
       await updateProxyHealth(proxy, health);
 
       if (!health.ok) {
+        emit(options, `[Proxy] ${health.error || "Global proxy IP verification failed"}`, "error");
         await globalThis.ProxyController.clearProxy().catch(() => null);
         return {
           ok: false,
@@ -208,6 +245,31 @@
     }
   }
 
+  // chrome.proxy is browser-wide: only one proxy can be live at a time, so
+  // testing proxy B unavoidably takes down proxy A while it runs. Whatever was
+  // applied before the test has to be put back afterwards, or testing a dead
+  // proxy silently drops the working one and the browser falls back to the
+  // real IP.
+  async function restoreProxy(previousProxy) {
+    if (!previousProxy) return null;
+
+    try {
+      await globalThis.ProxyController.applyProxy(previousProxy);
+      console.log("[Proxy] Restored previously active proxy", previousProxy.id);
+      return previousProxy;
+    } catch (error) {
+      console.warn("[Proxy] Could not restore the previously active proxy", error);
+      await globalThis.ProxyController.clearProxy().catch(() => null);
+      return null;
+    }
+  }
+
+  async function getPreviouslyActiveProxy(proxies, testedProxyId) {
+    const active = await (globalThis.ProxyController?.getActiveProxyState?.() ?? null);
+    if (!active?.proxyId || active.proxyId === testedProxyId) return null;
+    return proxies.find((item) => item.id === active.proxyId) || null;
+  }
+
   async function testProxy(proxyId) {
     const proxies = await globalThis.ProxyStorage.getProxies();
     const proxy = proxies.find((item) => item.id === proxyId);
@@ -220,37 +282,78 @@
       return { ok: false, error: "Proxy is disabled" };
     }
 
+    // Snapshot before anything touches chrome.proxy.
+    const previousProxy = await getPreviouslyActiveProxy(proxies, proxyId);
+
     try {
+      // Clearing here is safe: TEST_PROXY is rejected while automation runs,
+      // and previousProxy is restored below whatever the outcome.
+      const baselineIp = await captureBaselineIp({ clean: true });
       await globalThis.ProxyController.applyProxy(proxy);
-      const health = await globalThis.ProxyHealthChecker.verifyCurrentIp(proxy);
+      const health = await verifyProxy(proxy, baselineIp);
       await updateProxyHealth(proxy, health);
-      await globalThis.ProxyController.clearProxy();
 
       if (!health.ok) {
         console.log("[Proxy] Proxy failed", health.error);
+        // Never leave a half-applied proxy behind, and never leave the user
+        // unproxied because some *other* proxy failed its test.
+        const restored = await restoreProxy(previousProxy);
+        if (!restored) {
+          await globalThis.ProxyController.clearProxy().catch(() => null);
+        }
+
         return {
           ok: false,
           status: health.status,
+          ip: health.ip || "",
+          directIp: baselineIp,
+          restoredProxyId: restored?.id || "",
           error: health.error,
+        };
+      }
+
+      // A passing test leaves a proxy applied - but not at the cost of the one
+      // that was already working. If something was active, put it back and say
+      // so; only an idle browser keeps the freshly tested proxy.
+      if (previousProxy) {
+        const restored = await restoreProxy(previousProxy);
+        return {
+          ok: true,
+          applied: Boolean(restored),
+          keptPrevious: Boolean(restored),
+          restoredProxyId: restored?.id || "",
+          status: "Online",
+          ip: health.ip,
+          directIp: baselineIp,
+          latency: health.latency,
         };
       }
 
       return {
         ok: true,
+        applied: true,
         status: "Online",
         ip: health.ip,
+        directIp: baselineIp,
         latency: health.latency,
       };
     } catch (error) {
-      await globalThis.ProxyController.clearProxy().catch(() => null);
+      const status = getProxyFailureStatus(error.message);
       await globalThis.ProxyStorage.updateProxy(proxy.id, {
-        status: "Offline",
+        status,
         lastCheck: new Date().toISOString(),
       });
       console.log("[Proxy] Proxy failed", error);
+
+      const restored = await restoreProxy(previousProxy);
+      if (!restored) {
+        await globalThis.ProxyController.clearProxy().catch(() => null);
+      }
+
       return {
         ok: false,
-        status: "Offline",
+        status,
+        restoredProxyId: restored?.id || "",
         error: error.message,
       };
     }

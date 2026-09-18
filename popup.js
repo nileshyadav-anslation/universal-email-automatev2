@@ -1697,8 +1697,20 @@ function populateGlobalProxySelect(proxies = [], selectedValue = globalProxySele
   globalProxySelect.value = selectedValue || '';
 }
 
+// The proxy Chrome is routing through right now, refreshed by
+// loadProxyManagerUi(). Null means no proxy of ours is in force.
+let activeProxyState = null;
+
+function isProxyActive(proxy) {
+  return Boolean(activeProxyState && activeProxyState.proxyId === proxy?.id);
+}
+
 function getProxyStatus(proxy) {
   if (proxy.enabled === false) return 'Disabled';
+  // "Online" from a past check says nothing about now. Only the proxy Chrome is
+  // actually routing through gets the live badge.
+  if (isProxyActive(proxy)) return 'Active';
+  if (proxy.status === 'Online') return 'Verified';
   return proxy.status || 'Untested';
 }
 
@@ -1885,7 +1897,9 @@ function renderProxyList(proxies = [], accountProxyMap = {}) {
     const meta = document.createElement('div');
     meta.className = 'proxy-card-meta';
     const location = [proxy.city, proxy.country].filter(Boolean).join(', ') || 'Location not set';
-    const lastIp = proxy.lastKnownIp ? `IP ${proxy.lastKnownIp}` : 'IP unverified';
+    const lastIp = isProxyActive(proxy)
+      ? `Routing via ${activeProxyState.ip || proxy.lastKnownIp || 'proxy'}`
+      : (proxy.lastKnownIp ? `Last verified IP ${proxy.lastKnownIp}` : 'IP unverified');
     const latency = proxy.latency ? `Latency ${proxy.latency}` : 'Latency unknown';
     meta.textContent = `${proxy.type || 'http'} | ${location} | ${lastIp} | ${latency}`;
 
@@ -1909,12 +1923,20 @@ function renderProxyList(proxies = [], accountProxyMap = {}) {
     toggleButton.textContent = proxy.enabled === false ? 'Enable' : 'Disable';
     toggleButton.addEventListener('click', () => toggleProxyEnabled(proxy));
 
+    // A passing Test leaves the proxy applied browser-wide, so there has to be
+    // a visible way to switch it back off without removing the proxy config.
+    const clearButton = document.createElement('button');
+    clearButton.className = 'btn settings-action';
+    clearButton.textContent = 'Clear';
+    clearButton.title = 'Stop routing Chrome through this proxy';
+    clearButton.addEventListener('click', () => clearActiveProxy(clearButton));
+
     const removeButton = document.createElement('button');
     removeButton.className = 'btn settings-action danger';
     removeButton.textContent = 'Remove';
     removeButton.addEventListener('click', () => removeProxy(proxy.id));
 
-    actions.append(testButton, toggleButton, removeButton);
+    actions.append(testButton, clearButton, toggleButton, removeButton);
     card.append(head, meta, assignment, assignmentMeta, actions);
     proxyList.appendChild(card);
   });
@@ -1942,32 +1964,81 @@ async function updateProxyAssignment(proxy, nextAccountId, previousAccountId) {
   log(nextAccountId ? 'Proxy assignment updated.' : 'Proxy unassigned.', 'success');
 }
 
+// Only the proxy Chrome is actually routing through may be torn down here.
+// Disabling or removing some *other* proxy used to clear the live one, which
+// dropped the browser back to the real IP without saying anything.
+function isLiveProxy(proxyId) {
+  return Boolean(proxyId && activeProxyState && activeProxyState.proxyId === proxyId);
+}
+
 async function toggleProxyEnabled(proxy) {
   if (!window.ProxyStorage) return;
   const willEnable = proxy.enabled === false;
+  const wasLive = isLiveProxy(proxy.id);
 
   await window.ProxyStorage.updateProxy(proxy.id, {
     enabled: willEnable,
   });
 
-  if (!willEnable && currentState !== 'running' && currentState !== 'paused') {
+  if (!willEnable && wasLive && currentState !== 'running' && currentState !== 'paused') {
     await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
   }
 
   await loadProxyManagerUi();
-  log(willEnable ? 'Proxy enabled.' : 'Proxy disabled.', 'success');
+
+  if (!willEnable && wasLive) {
+    log('Proxy disabled and cleared. Chrome is back on the direct connection.', 'success');
+    return;
+  }
+
+  log(willEnable ? 'Proxy enabled.' : 'Proxy disabled. The active proxy was left untouched.', 'success');
 }
 
 async function removeProxy(proxyId) {
   if (!window.ProxyStorage) return;
+  const wasLive = isLiveProxy(proxyId);
+
   await window.ProxyStorage.removeProxy(proxyId);
 
-  if (currentState !== 'running' && currentState !== 'paused') {
+  if (wasLive && currentState !== 'running' && currentState !== 'paused') {
     await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
   }
 
   await loadProxyManagerUi();
-  log('Proxy removed.', 'success');
+  log(
+    wasLive
+      ? 'Proxy removed and cleared. Chrome is back on the direct connection.'
+      : 'Proxy removed. The active proxy was left untouched.',
+    'success'
+  );
+}
+
+async function clearActiveProxy(button) {
+  if (currentState === 'running' || currentState === 'paused') {
+    log('Stop automation before clearing the proxy.', 'error');
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Clearing';
+  }
+
+  try {
+    const result = await sendRuntimeMessage({ action: 'CLEAR_PROXY' });
+    await loadProxyManagerUi();
+
+    if (result.ok) {
+      log('Proxy cleared. Chrome is back on the direct connection.', 'success');
+    } else {
+      log(`Proxy clear failed: ${result.error || 'Unknown error'}`, 'error');
+    }
+  } finally {
+    if (button && button.isConnected) {
+      button.disabled = false;
+      button.textContent = 'Clear';
+    }
+  }
 }
 
 async function testProxy(proxyId, button) {
@@ -1979,10 +2050,26 @@ async function testProxy(proxyId, button) {
     const result = await sendRuntimeMessage({ action: 'TEST_PROXY', proxyId });
     await loadProxyManagerUi();
 
-    if (result.ok) {
-      log(`Proxy online: ${result.ip || 'IP verified'}`, 'success');
+    const restoredNote = result.restoredProxyId
+      ? ' The proxy that was already active has been put back.'
+      : '';
+
+    if (result.ok && result.keptPrevious) {
+      // Verified, but another proxy was already live and keeps priority.
+      log(
+        `Proxy works (exit IP ${result.ip}).${restoredNote} Clear the active proxy first if you want to switch to this one.`,
+        'success'
+      );
+    } else if (result.ok) {
+      // The proxy is left applied on success, so say so plainly - the old
+      // message said "online" for a proxy that had already been removed.
+      const viaIp = result.ip ? `IP is now ${result.ip}` : 'IP verified';
+      const realIp = result.directIp ? ` (real IP ${result.directIp})` : '';
+      log(`Proxy applied and verified. ${viaIp}${realIp}. It stays on until you clear it.`, 'success');
+    } else if (result.status === 'Not Applied') {
+      log(`Proxy NOT applied: ${result.error || 'traffic is still using the direct IP.'}${restoredNote}`, 'error');
     } else {
-      log(`Proxy test failed: ${result.error || result.status || 'Unknown error'}`, 'error');
+      log(`Proxy test failed: ${result.error || result.status || 'Unknown error'}${restoredNote}`, 'error');
     }
   } finally {
     if (button.isConnected) {
@@ -2010,11 +2097,16 @@ function renderDiscoveredAccountsPayload(rawAccounts = [], providers = getSelect
 async function loadProxyManagerUi() {
   if (!window.ProxyStorage) return;
 
-  const [proxySettings, proxies, accountProxyMap] = await Promise.all([
+  const [proxySettings, proxies, accountProxyMap, activeProxy] = await Promise.all([
     window.ProxyStorage.getProxySettings(),
     window.ProxyStorage.getProxies(),
     window.ProxyStorage.getAccountProxyMap(),
+    sendRuntimeMessage({ action: 'GET_ACTIVE_PROXY' })
+      .then(result => (result && result.ok ? result.active : null))
+      .catch(() => null),
   ]);
+
+  activeProxyState = activeProxy || null;
 
   proxyManagerToggle.checked = Boolean(proxySettings.enabled);
   proxyFallbackToggle.checked = Boolean(proxySettings.allowFallback);

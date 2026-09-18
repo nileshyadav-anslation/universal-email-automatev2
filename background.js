@@ -1545,6 +1545,20 @@ function isProxyManagerAvailable() {
   return Boolean(globalThis.ProxyManager && globalThis.ProxyStorage);
 }
 
+// Proxy Manager on but apply mode left at 'off' means every prepare* call
+// returns "skipped" and the run goes out unproxied without a word. Legacy
+// settings can still be in that state, so say it out loud rather than letting
+// a demo quietly use the real IP.
+async function warnIfProxyConfiguredButOff(settings = {}, proxyMode = 'off') {
+  if (proxyMode !== 'off') return;
+  if (!settings.enableProxyManager) return;
+
+  await logProxyEvent(
+    '[Proxy] Proxy Manager is enabled but Apply Mode is "off" - this run will NOT use a proxy. Set Apply Mode to Global or Per Account.',
+    'warn'
+  );
+}
+
 async function getInitialProxyAccount(settings = {}) {
   const selectedAccounts = Array.isArray(settings.selectedAccounts) ? settings.selectedAccounts : [];
   const currentIndex = Number.isFinite(settings.currentAccountIndex) ? settings.currentAccountIndex : 0;
@@ -1904,6 +1918,7 @@ async function startAutomationFromBackground(settings = {}) {
   settings = await prepareInboxLabJobSettings(selectedProvider, settings);
   let proxyPreparedBeforeOpen = false;
   const proxyMode = getProxyApplyMode(settings);
+  await warnIfProxyConfiguredButOff(settings, proxyMode);
 
   if (proxyMode === 'global') {
     const proxyResult = await prepareGlobalProxy(settings);
@@ -2474,6 +2489,8 @@ async function startMultiProviderAutomation(settings = {}) {
   if (proxyMode === 'perAccount') {
     throw new Error('Parallel multi-provider automation with per-account proxies is not supported in one Chrome profile. Use Same Proxy for All Tabs or run providers sequentially.');
   }
+
+  await warnIfProxyConfiguredButOff(settings, proxyMode);
 
   let reloadAfterProxy = false;
   if (proxyMode === 'global') {
@@ -4485,6 +4502,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'CLEAR_PROXY') {
     clearProxyForStop()
       .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  // Which proxy Chrome is routing through right now. Verified against
+  // chrome.proxy.settings, so it reports nothing if the setting was taken over.
+  if (message.action === 'GET_ACTIVE_PROXY') {
+    (async () => {
+      if (!globalThis.ProxyController?.getActiveProxyState) {
+        return { ok: true, active: null };
+      }
+
+      const active = await globalThis.ProxyController.getActiveProxyState();
+      const control = await globalThis.ProxyController.getControlState();
+      return { ok: true, active, control };
+    })()
+      .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));
 
     return true;

@@ -11,7 +11,15 @@
     applyMode: "off",
     globalProxyId: "",
   };
-  const PROXY_STATUSES = new Set(["Online", "Offline", "Auth Failed", "Untested"]);
+  // "Not Applied" means the proxy is reachable but Chrome is not routing
+  // through it, so traffic is still leaving on the real IP.
+  const PROXY_STATUSES = new Set([
+    "Online",
+    "Offline",
+    "Auth Failed",
+    "Not Applied",
+    "Untested",
+  ]);
 
   function readStorage(keys) {
     return new Promise((resolve) => chrome.storage.local.get(keys, resolve));

@@ -876,14 +876,24 @@ input[type="radio"] {
   font-weight: 800;
 }
 
-.proxy-status-online {
+/* Active = Chrome is routing through this proxy right now. */
+.proxy-status-online,
+.proxy-status-active {
   background: var(--green-soft);
   border-color: #bbf7d0;
   color: var(--green);
 }
 
+/* Verified = it passed a check, but is not the live proxy at the moment. */
+.proxy-status-verified {
+  background: var(--surface-3);
+  border-color: var(--border-hover);
+  color: var(--text-muted);
+}
+
 .proxy-status-offline,
-.proxy-status-auth-failed {
+.proxy-status-auth-failed,
+.proxy-status-not-applied {
   background: var(--red-soft);
   border-color: #fecaca;
   color: var(--red);
