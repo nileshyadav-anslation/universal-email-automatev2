@@ -326,6 +326,13 @@ zoho: {
         'a[data-test-id="message-item-main-content"][title*="Unread"]',
         '[data-test-id="message-list-item"] [aria-label*="Unread"]',
         '[data-test-id="message-list-item"] [title*="Unread"]',
+        // AOL's newer /f/ UI (mail.aol.com/d/... now redirects there) carries
+        // no data-test-id at all, so none of the selectors above match. Rows
+        // are role="row" with a data-mail-message-row flag, and read/unread is
+        // decided by isUnreadRow below. Listed last so the older UI still wins
+        // wherever it is still served.
+        "[data-mail-message-row]",
+        '[role="row"][data-mail-message-row]',
       ],
 
       subjectSelectors: [
@@ -363,6 +370,15 @@ zoho: {
       ],
 
       isUnreadRow(row) {
+        // The /f/ UI exposes no data-test-read, aria-label or indicator
+        // element. The only thing that distinguishes an unread row is the type
+        // scale applied to its sender and subject: bold when unread, regular
+        // when read. Both class names were read off a live AOL mailbox holding
+        // a mix of the two.
+        const bold = row?.querySelector?.(".text-bold13-lh18");
+        if (bold) return true;
+        if (row?.querySelector?.(".text-regular13-lh18")) return false;
+
         return PROVIDERS.yahoo.isUnreadRow(row);
       },
     },
@@ -856,7 +872,12 @@ zoho: {
     if (!row || !provider) return row;
 
     if (provider.host.includes("yahoo") || provider.host.includes("aol") || provider.host.includes("outlook")) {
-      return row.closest('[data-test-id="message-list-item"]') || row;
+      return (
+        row.closest('[data-test-id="message-list-item"]') ||
+        // AOL's /f/ UI row container.
+        row.closest("[data-mail-message-row]") ||
+        row
+      );
     }
 
     return row;
