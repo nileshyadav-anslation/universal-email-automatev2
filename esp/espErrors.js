@@ -45,18 +45,44 @@
     };
   }
 
-  // Maps an HTTP status onto the shared vocabulary. Adapters override this when
-  // a provider is more specific (Brevo, for instance, distinguishes a revoked
-  // key from an unauthorised one in its body).
+  // Providers say far more in a 401 body than a generic message can. Brevo, for
+  // instance, distinguishes "Key not found" (the key really is wrong) from
+  // "authentication not found in headers" (the request never carried the key at
+  // all - our bug, not the user's). Throwing that away made the two look
+  // identical and sent debugging down the wrong path.
+  function providerDetail(body) {
+    if (!body || typeof body !== "object") return "";
+    return String(body.message || body.error || body.error_description || "").trim();
+  }
+
+  // Maps an HTTP status onto the shared vocabulary.
   function espErrorFromStatus(status, provider, body = null) {
-    if (status === 401) return createEspError("INVALID_CREDENTIALS", provider, null, { status });
-    if (status === 403) return createEspError("PERMISSION_DENIED", provider, null, { status });
+    if (status === 401) {
+      const detail = providerDetail(body);
+      return createEspError(
+        "INVALID_CREDENTIALS",
+        provider,
+        detail
+          ? `${DEFAULT_MESSAGES.INVALID_CREDENTIALS} Provider said: "${detail}".`
+          : null,
+        { status, providerMessage: detail }
+      );
+    }
+    if (status === 403) {
+      const detail = providerDetail(body);
+      return createEspError(
+        "PERMISSION_DENIED",
+        provider,
+        detail ? `${DEFAULT_MESSAGES.PERMISSION_DENIED} Provider said: "${detail}".` : null,
+        { status, providerMessage: detail }
+      );
+    }
     if (status === 404) return createEspError("API_ERROR", provider, "The provider endpoint was not found.", { status });
     if (status === 429) return createEspError("RATE_LIMITED", provider, null, { status });
     if (status >= 500) return createEspError("API_ERROR", provider, "The provider is having problems. Try again shortly.", { status });
 
-    const detail = body && typeof body === "object" ? body.message || body.error || "" : "";
-    return createEspError("API_ERROR", provider, detail ? `Provider error: ${detail}` : null, { status });
+    const detail = providerDetail(body);
+    return createEspError("API_ERROR", provider, detail ? `Provider error: ${detail}` : null, { status, providerMessage: detail });
   }
 
   function isEspError(value) {
