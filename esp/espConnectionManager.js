@@ -88,6 +88,13 @@
       const error = toEspError(rawError, connection.provider);
       await EspStorage.updateConnection(id, { status: statusForError(error), lastError: error.message });
       log(`Connection test: FAILED - ${error.message}`, "error");
+
+      // On a rejected key, say what was actually stored so a truncated or
+      // whitespace-damaged paste is obvious without revealing the value.
+      if (error.code === "INVALID_CREDENTIALS" && typeof adapter.describeCredentialShape === "function") {
+        log(`Stored credential shape -> ${adapter.describeCredentialShape(connection.credentials)}`, "warn");
+      }
+
       return { ok: false, error };
     }
   }

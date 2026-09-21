@@ -103,6 +103,30 @@
       return null;
     }
 
+    // A rejected key is almost always truncated, padded with whitespace, or the
+    // wrong kind of key entirely. This describes the SHAPE of what was stored
+    // so that is visible in the log without the value ever being exposed:
+    // length, first few characters, and whether it needed trimming.
+    describeCredentialShape(credentials = {}) {
+      return this.credentialFields.map((field) => {
+        const raw = credentials[field.key];
+        if (raw === undefined || raw === null || raw === "") {
+          return `${field.label}: EMPTY`;
+        }
+
+        const text = String(raw);
+        const trimmed = text.trim();
+        const notes = [`${trimmed.length} chars`];
+
+        if (trimmed.length !== text.length) notes.push("had surrounding whitespace");
+        if (/\s/.test(trimmed)) notes.push("CONTAINS A SPACE OR LINE BREAK - likely copied incompletely");
+        // Enough to tell one key type from another, far too little to use.
+        notes.push(`starts "${trimmed.slice(0, 8)}"`);
+
+        return `${field.label}: ${notes.join(", ")}`;
+      }).join(" | ");
+    }
+
     async testConnection() { throw this.unsupported("connection testing"); }
     async getAccountInfo() { throw this.unsupported("account information"); }
     async getSendingDomains() { throw this.unsupported("sending domains"); }
