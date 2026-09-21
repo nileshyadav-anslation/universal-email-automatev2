@@ -63,31 +63,10 @@ const MAX_CONTINUOUS_RETRY_DELAY_MINUTES = 30;
 // While a run is in flight there is no scheduled next cycle, so this watchdog is
 // armed instead. Comfortably longer than a healthy cycle so it never races one.
 const CONTINUOUS_WATCHDOG_MIN_MINUTES = 15;
-const DEFAULT_BACKEND_BASE_URL = 'http://10.5.56.133:3000/api/anslation/product-api/knproducts/kncampaignastra/knemailastra/inbox-lab';
-const DEFAULT_BACKEND_CONNECTOR_ID = 'inbox-connector-mrdbbh2d-0pnehvxo';
-const DEFAULT_BACKEND_TOKEN = 'inboxlab_5tsdxevkmrdbbh2ekjemcy';
-const DEFAULT_BACKEND_ACCOUNT = 'barjrajkumar451@gmail.com';
-const BACKEND_WORKER_POLL_INTERVAL_MS = 5000;
-const BACKEND_WORKER_ALARM_NAME = 'emailReadAutomate.backendWorkerWatchdog';
 // chrome.alarms minimum period; wakes the service worker if Chrome killed the poll interval.
-const BACKEND_WORKER_ALARM_PERIOD_MINUTES = 0.5;
-const PENDING_INBOXLAB_RESULT_LIMIT = 20;
-const PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS = 5;
-const BACKEND_WORKER_STATUSES = {
-  disconnected: 'Disconnected',
-  connecting: 'Connecting',
-  idle: 'Idle',
-  running: 'Running',
-  paused: 'Paused',
-  stopped: 'Stopped'
-};
 const DEFAULT_AUTOMATION_SETTINGS = {
   selectedProvider: 'gmail',
   selectedProviders: ['gmail'],
-  backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
-  backendConnectorId: DEFAULT_BACKEND_CONNECTOR_ID,
-  backendToken: DEFAULT_BACKEND_TOKEN,
-  backendAccount: DEFAULT_BACKEND_ACCOUNT,
   readTime: 6,
   backDelay: 2,
   autoRefresh: true,
@@ -118,10 +97,6 @@ const DEFAULT_AUTOMATION_SETTINGS = {
 const AUTOMATION_SETTING_STORAGE_KEYS = [
   'selectedProvider',
   'selectedProviders',
-  'backendBaseUrl',
-  'backendConnectorId',
-  'backendToken',
-  'backendAccount',
   'readTime',
   'backDelay',
   'autoRefresh',
@@ -149,11 +124,6 @@ const AUTOMATION_SETTING_STORAGE_KEYS = [
   'selectedAccounts',
   'proxySettings'
 ];
-const LEGACY_BACKEND_BASE_URLS = [
-  'http://10.5.56.133:8000/api/knproducts/kncampaignastra/knemailastra/inbox-lab'
-];
-const LEGACY_BACKEND_CONNECTOR_IDS = ['extension-system-1'];
-const LEGACY_BACKEND_TOKENS = ['inboxlab_5tsdxevkmrddbbh2ekjemcy'];
 
 const PROVIDER_URLS = {
   gmail: 'https://mail.google.com/mail/u/0/#inbox',
@@ -178,8 +148,6 @@ const PROVIDER_LABELS = {
   proton: 'Proton',
   zoho: 'Zoho'
 };
-let backendWorkerTimer = null;
-let backendWorkerPollInFlight = false;
 
 function getProviderStartUrl(provider = 'gmail') {
   return PROVIDER_URLS[provider] || PROVIDER_URLS.gmail;
@@ -516,34 +484,6 @@ async function clearActivityLog() {
 // Migrate the legacy log array before any new entries are appended.
 queueActivityLogWrite(migrateLegacyActivityLog);
 
-async function logInboxLabEvent(message, level = 'info') {
-  if (!message) return;
-  console.log(message);
-  chrome.runtime.sendMessage({
-    type: 'LOG',
-    message,
-    level
-  }).catch(() => {});
-  await addActivityLogEntry(message, level).catch(() => {});
-}
-
-async function setBackendWorkerStatus(status = BACKEND_WORKER_STATUSES.disconnected, extra = {}) {
-  const safeStatus = Object.values(BACKEND_WORKER_STATUSES).includes(status)
-    ? status
-    : BACKEND_WORKER_STATUSES.disconnected;
-
-  await chrome.storage.local.set({
-    backendWorkerStatus: safeStatus,
-    backendWorkerLastUpdate: new Date().toISOString(),
-    ...extra
-  });
-  chrome.runtime.sendMessage({
-    type: 'WORKER_STATUS',
-    status: safeStatus,
-    ...extra
-  }).catch(() => {});
-}
-
 function isAutomationBusyFromStorage(data = {}) {
   if (data.automationState === 'running' || data.automationState === 'paused') {
     return true;
@@ -553,21 +493,6 @@ function isAutomationBusyFromStorage(data = {}) {
     ? data.providerAutomationStates
     : {};
   return hasActiveProviderState(states);
-}
-
-function inferProviderFromInboxLabJob(job = {}) {
-  const explicitProvider = String(job.provider || '').trim().toLowerCase();
-  if (MULTI_PROVIDER_IDS.includes(explicitProvider)) {
-    return explicitProvider;
-  }
-
-  const email = extractEmail(job.account_email || job.accountEmail || job.account || '');
-  if (/@(?:gmail|googlemail)\.com$/i.test(email)) return 'gmail';
-  if (/@(?:yahoo|ymail|rocketmail)\.com$/i.test(email)) return 'yahoo';
-  if (/@aol\.com$/i.test(email)) return 'aol';
-  if (/@(?:outlook|hotmail|live|msn)\.com$/i.test(email)) return 'outlook';
-
-  return '';
 }
 
 async function getStoredAutomationSettings() {
@@ -597,30 +522,7 @@ async function getStoredAutomationSettings() {
   return settings;
 }
 
-async function getWorkerAutomationSettings(job = {}) {
-  const storedSettings = await getStoredAutomationSettings();
-  const selectedProviders = getSelectedProvidersFromSettings(storedSettings);
-  const provider = inferProviderFromInboxLabJob(job)
-    || storedSettings.selectedProvider
-    || selectedProviders[0]
-    || 'gmail';
-
-  return getContinuousRunSettings({
-    ...storedSettings,
-    selectedProvider: provider,
-    selectedProviders: [provider],
-    inboxLabJob: {
-      ...job,
-      provider
-    }
-  });
-}
-
 async function handleAutomationStartFailure(error, selectedProviders = []) {
-  if (selectedProviders.length === 1) {
-    await postActiveInboxLabJobFailure(error, selectedProviders[0]);
-  }
-
   await setAutomationState('idle').catch(() => {});
   await clearProxyForStop();
 
@@ -665,680 +567,9 @@ async function startAutomationEntryPoint(settings = {}) {
     ? startMultiProviderAutomation
     : startAutomationFromBackground;
   const continuousSettings = { ...runSettings };
-  delete continuousSettings.inboxLabJob;
 
   await setContinuousModeActive(continuousSettings);
   return starter(runSettings);
-}
-
-async function ensureBackendWorkerAlarm() {
-  if (!chrome.alarms) return;
-
-  const existing = await chrome.alarms.get(BACKEND_WORKER_ALARM_NAME).catch(() => null);
-  if (!existing) {
-    await chrome.alarms.create(BACKEND_WORKER_ALARM_NAME, {
-      periodInMinutes: BACKEND_WORKER_ALARM_PERIOD_MINUTES
-    });
-  }
-}
-
-async function clearBackendWorkerAlarm() {
-  if (!chrome.alarms) return;
-  await chrome.alarms.clear(BACKEND_WORKER_ALARM_NAME);
-}
-
-async function stopBackendWorker(status = BACKEND_WORKER_STATUSES.stopped, extra = {}) {
-  if (backendWorkerTimer) {
-    clearInterval(backendWorkerTimer);
-    backendWorkerTimer = null;
-  }
-  backendWorkerPollInFlight = false;
-  await clearBackendWorkerAlarm().catch(() => {});
-  await setBackendWorkerStatus(status, extra);
-}
-
-async function startBackendWorker() {
-  const data = await getStorage([
-    'backendConnectionStatus',
-    'backendWorkerEnabled',
-    'backendWorkerStatus'
-  ]);
-
-  if (data.backendConnectionStatus !== 'Online') {
-    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
-    return;
-  }
-
-  if (data.backendWorkerEnabled === false) {
-    await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
-    return;
-  }
-
-  if (!backendWorkerTimer) {
-    backendWorkerTimer = setInterval(() => {
-      pollBackendWorker().catch(error => {
-        console.warn('[Worker] Poll failed', error);
-      });
-    }, BACKEND_WORKER_POLL_INTERVAL_MS);
-  }
-
-  await ensureBackendWorkerAlarm().catch(error => {
-    console.warn('[Worker] Alarm setup failed', error);
-  });
-
-  if (data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.running && data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.paused) {
-    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
-  }
-
-  pollBackendWorker().catch(error => {
-    console.warn('[Worker] Immediate poll failed', error);
-  });
-}
-
-async function syncBackendWorkerLifecycle() {
-  const data = await getStorage(['backendConnectionStatus', 'backendWorkerEnabled']);
-
-  if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
-    await startBackendWorker();
-  } else if (data.backendConnectionStatus !== 'Online') {
-    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
-  } else {
-    await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
-  }
-}
-
-async function pollBackendWorker() {
-  if (backendWorkerPollInFlight) return;
-  backendWorkerPollInFlight = true;
-
-  try {
-    const gate = await getStorage([
-      'backendConnectionStatus',
-      'backendWorkerEnabled',
-      'backendWorkerStatus',
-      'automationState',
-      'providerAutomationStates'
-    ]);
-
-    if (gate.backendConnectionStatus !== 'Online') {
-      await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
-      return;
-    }
-
-    if (gate.backendWorkerEnabled === false) {
-      await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
-      return;
-    }
-
-    await flushPendingInboxLabResults();
-
-    // The gate below short-circuits on storage, so a stale busy flag would never
-    // reach isAutomationSessionActive()'s reclaim. Clear dead state first, then
-    // re-read.
-    const reclaimed = await reclaimDeadAutomationState();
-    const busyGate = reclaimed
-      ? await getStorage(['automationState', 'providerAutomationStates'])
-      : gate;
-
-    if (isAutomationBusyFromStorage(busyGate) || await isAutomationSessionActive()) {
-      return;
-    }
-
-    const job = await claimInboxLabJob(gate, { silent: true });
-    if (!job) {
-      if (gate.backendWorkerStatus !== BACKEND_WORKER_STATUSES.idle) {
-        await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
-      }
-      return;
-    }
-
-    await handleIncomingBackendWorkerJob(job);
-  } catch (error) {
-    console.warn('[Worker] Backend poll failed', error);
-    await chrome.storage.local.set({
-      backendWorkerLastError: sanitizeBackendError(error.message || error),
-      backendWorkerLastUpdate: new Date().toISOString()
-    }).catch(() => {});
-  } finally {
-    backendWorkerPollInFlight = false;
-  }
-}
-
-async function handleIncomingBackendWorkerJob(job = {}) {
-  const settings = await getWorkerAutomationSettings(job);
-  const selectedProviders = getSelectedProvidersFromSettings(settings);
-
-  await chrome.storage.local.set({
-    backendWorkerActiveJob: job,
-    backendWorkerLastJobId: job.id || '',
-    backendWorkerLastError: ''
-  });
-  await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.running);
-
-  try {
-    await startAutomationEntryPoint(settings);
-  } catch (error) {
-    await handleAutomationStartFailure(error, selectedProviders);
-    await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
-    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle, {
-      backendWorkerLastError: sanitizeBackendError(error.message || error)
-    });
-    throw error;
-  }
-}
-
-async function maybeSetBackendWorkerIdleAfterTerminal() {
-  const data = await getStorage([
-    'backendConnectionStatus',
-    'backendWorkerEnabled',
-    'backendWorkerStatus',
-    'backendWorkerActiveJob'
-  ]);
-
-  if (data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.running && data.backendWorkerStatus !== BACKEND_WORKER_STATUSES.paused) {
-    return;
-  }
-
-  await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
-  if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
-    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
-  } else {
-    await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected);
-  }
-}
-
-async function updateBackendWorkerForControl(action = '') {
-  const data = await getStorage([
-    'backendConnectionStatus',
-    'backendWorkerEnabled',
-    'backendWorkerStatus',
-    'backendWorkerActiveJob'
-  ]);
-  const hasWorkerRun = Boolean(data.backendWorkerActiveJob)
-    || data.backendWorkerStatus === BACKEND_WORKER_STATUSES.running
-    || data.backendWorkerStatus === BACKEND_WORKER_STATUSES.paused;
-
-  if (!hasWorkerRun) return;
-
-  if (action === 'PAUSE') {
-    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.paused);
-  } else if (action === 'RESUME') {
-    await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.running);
-  } else if (action === 'STOP') {
-    await chrome.storage.local.set({ backendWorkerActiveJob: null }).catch(() => {});
-    if (data.backendConnectionStatus === 'Online' && data.backendWorkerEnabled !== false) {
-      await setBackendWorkerStatus(BACKEND_WORKER_STATUSES.idle);
-    } else {
-      await stopBackendWorker(BACKEND_WORKER_STATUSES.stopped);
-    }
-  }
-}
-
-function normalizeBackendValue(value, fallback, legacyValues = []) {
-  const normalized = String(value || '').trim();
-  return !normalized || legacyValues.includes(normalized) ? fallback : normalized;
-}
-
-function normalizeBackendConnectorConfig(config = {}) {
-  return {
-    baseUrl: normalizeBackendValue(config.baseUrl || config.backendBaseUrl, DEFAULT_BACKEND_BASE_URL, LEGACY_BACKEND_BASE_URLS),
-    connectorId: normalizeBackendValue(config.connectorId || config.backendConnectorId, DEFAULT_BACKEND_CONNECTOR_ID, LEGACY_BACKEND_CONNECTOR_IDS),
-    token: normalizeBackendValue(config.token || config.backendToken, DEFAULT_BACKEND_TOKEN, LEGACY_BACKEND_TOKENS),
-    account: normalizeBackendValue(config.account || config.backendAccount, DEFAULT_BACKEND_ACCOUNT),
-  };
-}
-
-async function migrateStoredBackendConnectorDefaults() {
-  const data = await getStorage([
-    'backendBaseUrl',
-    'backendConnectorId',
-    'backendToken',
-    'backendAccount'
-  ]);
-  const next = normalizeBackendConnectorConfig(data);
-  const current = {
-    backendBaseUrl: String(data.backendBaseUrl || '').trim(),
-    backendConnectorId: String(data.backendConnectorId || '').trim(),
-    backendToken: String(data.backendToken || '').trim(),
-    backendAccount: String(data.backendAccount || '').trim(),
-  };
-
-  if (
-    current.backendBaseUrl === next.baseUrl &&
-    current.backendConnectorId === next.connectorId &&
-    current.backendToken === next.token &&
-    current.backendAccount === next.account
-  ) {
-    return;
-  }
-
-  await chrome.storage.local.set({
-    backendBaseUrl: next.baseUrl,
-    backendConnectorId: next.connectorId,
-    backendToken: next.token,
-    backendAccount: next.account,
-    backendConnectionStatus: 'Not tested',
-    backendLastError: '',
-  });
-}
-
-function sanitizeBackendError(error = '') {
-  const message = String(error || 'Connection failed');
-  return message.length > 180 ? `${message.slice(0, 177)}...` : message;
-}
-
-async function readBackendResponseSnippet(response) {
-  try {
-    const text = await response.text();
-    return sanitizeBackendError(text.replace(/\s+/g, ' ').trim());
-  } catch (error) {
-    return '';
-  }
-}
-
-async function fetchBackendWithTimeout(url, options = {}, timeoutMs = 12000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function testBackendConnector(config = {}) {
-  const backend = normalizeBackendConnectorConfig(config);
-
-  if (!backend.baseUrl || !backend.connectorId || !backend.token || !backend.account) {
-    return { ok: false, error: 'Backend URL, Connector ID, Token, and Account are required' };
-  }
-
-  const headers = {
-    Accept: 'application/json, text/plain, */*',
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${backend.token}`,
-    'X-Connector-ID': backend.connectorId,
-    'X-InboxLab-Token': backend.token,
-    'X-InboxLab-Account': backend.account,
-    'X-Account-Email': backend.account,
-  };
-  const payload = {
-    connectorId: backend.connectorId,
-    token: backend.token,
-    account: backend.account,
-    accountEmail: backend.account,
-    source: 'chrome-extension',
-    event: 'connect_test',
-    timestamp: new Date().toISOString(),
-  };
-  const attempts = [
-    {
-      method: 'POST',
-      options: {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      },
-    },
-    {
-      method: 'GET',
-      options: {
-        method: 'GET',
-        headers,
-      },
-    },
-  ];
-  let lastFailure = 'Connection failed';
-
-  for (const attempt of attempts) {
-    try {
-      const response = await fetchBackendWithTimeout(backend.baseUrl, attempt.options);
-      const responseSnippet = await readBackendResponseSnippet(response);
-
-      if (response.ok) {
-        await chrome.storage.local.set({
-          backendBaseUrl: backend.baseUrl,
-          backendConnectorId: backend.connectorId,
-          backendToken: backend.token,
-          backendAccount: backend.account,
-          backendConnectionStatus: 'Online',
-          backendLastCheck: new Date().toISOString(),
-          backendLastError: '',
-        });
-        return {
-          ok: true,
-          status: response.status,
-          method: attempt.method,
-        };
-      }
-
-      lastFailure = `HTTP ${response.status}${responseSnippet ? `: ${responseSnippet}` : ''}`;
-    } catch (error) {
-      lastFailure = error.name === 'AbortError'
-        ? 'Connection timed out'
-        : (error.message || 'Connection failed');
-    }
-  }
-
-  const safeError = sanitizeBackendError(lastFailure);
-  await chrome.storage.local.set({
-    backendConnectionStatus: 'Offline',
-    backendLastCheck: new Date().toISOString(),
-    backendLastError: safeError,
-  });
-  return { ok: false, error: safeError };
-}
-
-function buildInboxLabUrl(baseUrl = '', path = '') {
-  const base = String(baseUrl || '').trim().replace(/\/+$/, '');
-  const suffix = String(path || '').trim();
-  return `${base}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
-}
-
-function buildInboxLabHeaders(backend = {}) {
-  return {
-    Accept: 'application/json, text/plain, */*',
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${backend.token}`,
-    'X-Connector-ID': backend.connectorId,
-    'X-InboxLab-Token': backend.token,
-    'X-InboxLab-Account': backend.account,
-    'X-Account-Email': backend.account,
-  };
-}
-
-async function getBackendConnectorConfig(overrides = {}) {
-  const stored = await getStorage([
-    'backendBaseUrl',
-    'backendConnectorId',
-    'backendToken',
-    'backendAccount'
-  ]);
-
-  return normalizeBackendConnectorConfig({
-    ...stored,
-    ...overrides
-  });
-}
-
-async function readBackendJson(response) {
-  const text = await response.text().catch(() => '');
-  if (!text) return {};
-
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    return { raw: text };
-  }
-}
-
-function normalizeInboxLabJob(rawJob = {}) {
-  const source = rawJob?.job || rawJob?.data?.job || rawJob?.data || rawJob;
-  if (!source || typeof source !== 'object') return null;
-
-  const id = source.id || source.job_id || source.jobId;
-  if (!id) return null;
-
-  return {
-    id: String(id),
-    provider: String(source.provider || '').trim(),
-    account_email: extractEmail(source.account_email || source.accountEmail || source.account || ''),
-    subject: String(source.subject || '').trim(),
-    sender: String(source.sender || source.from || '').trim(),
-    instructions: String(source.instructions || source.instruction || source.action || '').trim(),
-    folder: String(source.folder || source.mailbox || '').trim(),
-    raw: source
-  };
-}
-
-async function claimInboxLabJob(config = {}, options = {}) {
-  const silent = Boolean(options.silent);
-  const backend = await getBackendConnectorConfig(config);
-
-  if (!backend.baseUrl || !backend.connectorId || !backend.token) {
-    throw new Error('Inbox Lab connector settings are missing');
-  }
-
-  const url = buildInboxLabUrl(
-    backend.baseUrl,
-    `/jobs/claim?connector_id=${encodeURIComponent(backend.connectorId)}&token=${encodeURIComponent(backend.token)}`
-  );
-
-  if (!silent) {
-    await logInboxLabEvent('[InboxLab] Claiming job', 'info');
-  }
-
-  const response = await fetchBackendWithTimeout(url, {
-    method: 'GET',
-    headers: buildInboxLabHeaders(backend),
-  });
-
-  if (response.status === 204) {
-    await chrome.storage.local.set({ activeInboxLabJob: null });
-    if (!silent) {
-      await logInboxLabEvent('[InboxLab] No job available', 'warn');
-    }
-    return null;
-  }
-
-  const body = await readBackendJson(response);
-
-  if (!response.ok) {
-    const message = sanitizeBackendError(body.detail || body.error || body.message || body.raw || `HTTP ${response.status}`);
-    throw new Error(`Inbox Lab claim failed: ${message}`);
-  }
-
-  const job = normalizeInboxLabJob(body);
-  if (!job) {
-    await chrome.storage.local.set({ activeInboxLabJob: null });
-    if (!silent) {
-      await logInboxLabEvent('[InboxLab] No job available', 'warn');
-    }
-    return null;
-  }
-
-  await chrome.storage.local.set({
-    activeInboxLabJob: job,
-    backendConnectionStatus: 'Online',
-    backendLastCheck: new Date().toISOString(),
-    backendLastError: '',
-  });
-  await logInboxLabEvent(`[InboxLab] Claimed job ${job.id}${job.subject ? `: ${job.subject}` : ''}`, 'success');
-
-  return job;
-}
-
-function isRetryableBackendStatus(status) {
-  return status >= 500 || status === 408 || status === 429;
-}
-
-async function queuePendingInboxLabResult(job = {}, result = {}, attempts = 1) {
-  if (!job?.id) return;
-
-  if (attempts > PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS) {
-    await logInboxLabEvent(
-      `[InboxLab] Dropping result for job ${job.id} after ${PENDING_INBOXLAB_RESULT_MAX_ATTEMPTS} failed attempts`,
-      'error'
-    );
-    return;
-  }
-
-  const data = await getStorage(['pendingInboxLabResults']);
-  const queue = Array.isArray(data.pendingInboxLabResults) ? data.pendingInboxLabResults : [];
-  const next = queue.filter(item => item?.job?.id !== job.id);
-  next.push({ job, result, attempts, queuedAt: new Date().toISOString() });
-
-  await chrome.storage.local.set({
-    pendingInboxLabResults: next.slice(-PENDING_INBOXLAB_RESULT_LIMIT)
-  });
-  await logInboxLabEvent(`[InboxLab] Result for job ${job.id} queued for retry (attempt ${attempts})`, 'warn');
-}
-
-async function flushPendingInboxLabResults() {
-  const data = await getStorage(['pendingInboxLabResults']);
-  const queue = Array.isArray(data.pendingInboxLabResults) ? data.pendingInboxLabResults : [];
-  if (!queue.length) return;
-
-  await chrome.storage.local.set({ pendingInboxLabResults: [] });
-  for (const item of queue) {
-    await postInboxLabJobResult(item.job, item.result, {}, { attempt: item.attempts }).catch(() => {});
-  }
-}
-
-async function postInboxLabJobResult(job = {}, result = {}, config = {}, options = {}) {
-  const attempt = Number.isFinite(options.attempt) ? options.attempt : 0;
-  const normalizedJob = normalizeInboxLabJob(job);
-  if (!normalizedJob?.id) {
-    return { ok: false, error: 'Inbox Lab job id is missing' };
-  }
-
-  const backend = await getBackendConnectorConfig(config);
-  const url = buildInboxLabUrl(backend.baseUrl, `/jobs/${encodeURIComponent(normalizedJob.id)}/result`);
-  const payload = {
-    connector_id: backend.connectorId,
-    token: backend.token,
-    status: result.status || 'completed',
-    folder: result.folder || normalizedJob.folder || '',
-    summary: result.summary || '',
-    provider: result.provider || normalizedJob.provider || '',
-    account_email: result.account_email || normalizedJob.account_email || backend.account,
-    subject: result.subject || normalizedJob.subject || '',
-    links_opened: Number.isFinite(result.linksOpened) ? result.linksOpened : undefined,
-    replied: typeof result.replied === 'boolean' ? result.replied : undefined,
-    error: result.error || undefined,
-  };
-
-  let response;
-  try {
-    response = await fetchBackendWithTimeout(url, {
-      method: 'POST',
-      headers: buildInboxLabHeaders(backend),
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    const message = sanitizeBackendError(error.message || error);
-    await queuePendingInboxLabResult(normalizedJob, result, attempt + 1);
-    await chrome.storage.local.set({ activeInboxLabJob: null }).catch(() => {});
-    await logInboxLabEvent(`[InboxLab] Result post failed: ${message}. Will retry.`, 'warn');
-    return { ok: false, queued: true, error: message };
-  }
-  const body = await readBackendJson(response);
-
-  if (!response.ok) {
-    const message = sanitizeBackendError(body.detail || body.error || body.message || body.raw || `HTTP ${response.status}`);
-
-    if (isRetryableBackendStatus(response.status)) {
-      await queuePendingInboxLabResult(normalizedJob, result, attempt + 1);
-      await chrome.storage.local.set({ activeInboxLabJob: null }).catch(() => {});
-      await logInboxLabEvent(`[InboxLab] Result post failed: ${message}. Will retry.`, 'warn');
-      return { ok: false, queued: true, error: message, status: response.status };
-    }
-
-    await logInboxLabEvent(`[InboxLab] Result post failed: ${message}`, 'error');
-    return { ok: false, error: message, status: response.status };
-  }
-
-  await chrome.storage.local.set({
-    activeInboxLabJob: null,
-    backendConnectionStatus: 'Online',
-    backendLastCheck: new Date().toISOString(),
-    backendLastError: '',
-  });
-  await logInboxLabEvent(`[InboxLab] Result posted for job ${normalizedJob.id}`, 'success');
-  return { ok: true, status: response.status, body };
-}
-
-async function postActiveInboxLabJobFailure(error, provider = '') {
-  const data = await getStorage(['activeInboxLabJob']);
-  const job = normalizeInboxLabJob(data.activeInboxLabJob || {});
-  if (!job?.id) return;
-  if (provider && job.provider && job.provider !== provider) return;
-
-  await postInboxLabJobResult(job, {
-    status: 'failed',
-    provider: job.provider || provider || '',
-    folder: job.folder || '',
-    subject: job.subject || '',
-    account_email: job.account_email || '',
-    summary: `Inbox Lab job failed before automation completed: ${error.message || error}`,
-    error: error.message || String(error || 'automation_start_failed'),
-  }).catch(resultError => {
-    console.warn('[InboxLab] Failed to post start failure result', resultError);
-  });
-}
-
-async function attachInboxLabJobToSettings(provider = '', settings = {}, claimedJob = {}) {
-  const job = {
-    ...claimedJob,
-    provider: claimedJob.provider || provider
-  };
-  const nextSettings = {
-    ...settings,
-    selectedProvider: provider,
-    inboxLabJob: job,
-  };
-
-  if (job.account_email) {
-    const data = await getStorage(['discoveredAccounts']);
-    const discoveredAccounts = Array.isArray(data.discoveredAccounts) ? data.discoveredAccounts : [];
-    const targetAccount = discoveredAccounts.find(account => {
-      if (!account || !String(account.id || '').startsWith(`${provider}:`)) return false;
-      return extractEmail(`${account.label || ''} ${account.detectedLabel || ''} ${account.id || ''}`) === job.account_email;
-    });
-
-    if (targetAccount?.id) {
-      nextSettings.enableAccountSwitching = true;
-      nextSettings.selectedAccounts = [targetAccount.id];
-      nextSettings.currentAccountIndex = 0;
-      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account: ${job.account_email}`, 'info');
-    } else {
-      await logInboxLabEvent(`[InboxLab] Target ${getProviderLabel(provider)} account not found in discovered accounts: ${job.account_email}`, 'warn');
-    }
-  }
-
-  return nextSettings;
-}
-
-async function prepareInboxLabJobSettings(provider = '', settings = {}) {
-  if (!MULTI_PROVIDER_IDS.includes(provider)) return settings;
-
-  if (settings.inboxLabJob?.id) {
-    const nextSettings = await attachInboxLabJobToSettings(provider, settings, settings.inboxLabJob);
-    await chrome.storage.local.set({ activeInboxLabJob: nextSettings.inboxLabJob }).catch(() => {});
-    return nextSettings;
-  }
-
-  let job = null;
-
-  try {
-    job = await claimInboxLabJob(settings);
-  } catch (error) {
-    await chrome.storage.local.set({
-      activeInboxLabJob: null,
-      backendLastError: sanitizeBackendError(error.message || error),
-    }).catch(() => {});
-    await logInboxLabEvent(`[InboxLab] Job claim failed. Running normal ${getProviderLabel(provider)} automation. ${error.message || error}`, 'warn');
-    return {
-      ...settings,
-      inboxLabJob: null,
-    };
-  }
-
-  if (!job) {
-    await logInboxLabEvent(`[InboxLab] No job claimed. Running normal ${getProviderLabel(provider)} automation.`, 'info');
-    return {
-      ...settings,
-      inboxLabJob: null,
-    };
-  }
-
-  const nextSettings = await attachInboxLabJobToSettings(provider, settings, job);
-  await chrome.storage.local.set({ activeInboxLabJob: nextSettings.inboxLabJob }).catch(() => {});
-  return nextSettings;
 }
 
 // ── ESP ──────────────────────────────────────────────────────────────────────
@@ -1495,7 +726,7 @@ async function createContinuousAlarm(delayMinutes) {
   }
 }
 
-// Mirrors ensureBackendWorkerAlarm and ensureWarmTalkAlarm, which is why those
+// Mirrors ensureWarmTalkAlarm, which is why that
 // two survive a browser or extension restart and continuous mode did not: Chrome
 // drops an extension's alarms on update/reload, and nothing re-created this one.
 async function ensureContinuousAlarm() {
@@ -1649,9 +880,6 @@ async function handleTerminalAutomationMessage(message = {}, sender = {}, termin
   const stateResult = await updateProviderAutomationState(provider, terminalState);
   await addActivityLogEntry(prefixProviderMessage(logMessage, provider), terminalState === 'error' ? 'error' : 'success');
   await maybeScheduleContinuousAfterTerminal(stateResult, terminalState);
-  if (shouldScheduleContinuousFromUpdate(stateResult)) {
-    await maybeSetBackendWorkerIdleAfterTerminal();
-  }
 
   return {
     ok: true,
@@ -2070,7 +1298,6 @@ async function getOrCreateMailTab(provider = 'gmail') {
 
 async function startAutomationFromBackground(settings = {}) {
   const selectedProvider = settings.selectedProvider || 'gmail';
-  settings = await prepareInboxLabJobSettings(selectedProvider, settings);
   settings = await attachEspRulesToSettings(settings);
   let proxyPreparedBeforeOpen = false;
   const proxyMode = getProxyApplyMode(settings);
@@ -2601,7 +1828,6 @@ async function startProviderAutomationTab(provider, settings = {}, options = {})
     currentAccountIndex: 0,
     sessionOpened: 0
   };
-  providerSettings = await prepareInboxLabJobSettings(provider, providerSettings);
   providerSettings = await attachEspRulesToSettings(providerSettings);
 
   const tab = await getOrCreateMailTab(provider);
@@ -2685,7 +1911,6 @@ async function startMultiProviderAutomation(settings = {}) {
       chrome.runtime.sendMessage({ type: 'LOG', message, level: 'success', provider }).catch(() => {});
       addActivityLogEntry(message, 'success').catch(() => {});
     } catch (error) {
-      await postActiveInboxLabJobFailure(error, provider);
       providerAutomationStates[provider] = 'error';
       const warning = provider === 'aol'
         ? 'AOL requires manual login. Please sign in manually, then restart AOL automation.'
@@ -2831,7 +2056,6 @@ async function controlProviderAutomations(action, providers = []) {
       providerAutomationStates
     });
   }
-  await updateBackendWorkerForControl(action);
 
   return {
     ok: true,
@@ -3403,8 +2627,8 @@ async function switchMailAccount(tabId, account, settings) {
 // Each conversation is broken into individually persisted steps (send, then
 // receive) held in warmTalkQueue. A step is atomic: the service worker can die
 // at any point and the alarm below resumes from the queue rather than restarting
-// the conversation. Job payloads deliberately mirror normalizeInboxLabJob so a
-// future WarmTalk backend can replace this scheduler without touching the
+// the conversation. Job payloads keep a provider-neutral shape so a future
+// WarmTalk backend could replace this scheduler without touching the
 // content-script executor.
 const WARM_TALK_ALARM_NAME = 'emailReadAutomate.warmTalkLoop';
 const WARM_TALK_ALARM_PERIOD_MINUTES = 0.5;
@@ -3938,8 +3162,6 @@ async function getWarmTalkStepSettings(step) {
     selectedAccounts: [step.accountId],
     currentAccountIndex: 0,
     sessionOpened: 0,
-    // Never let a WarmTalk run also pick up an Inbox Lab job.
-    inboxLabJob: null,
     enableContinuousMode: false,
     // Threads revisit the same conversation row repeatedly. Processed tracking
     // would mark it replied on turn 1 and silently skip every later reply, so
@@ -4533,39 +3755,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.action === 'TEST_BACKEND_CONNECTOR') {
-    setBackendWorkerStatus(BACKEND_WORKER_STATUSES.connecting).catch(() => {});
-    testBackendConnector(message.backend || {})
-      .then(async result => {
-        if (result.ok) {
-          await chrome.storage.local.set({ backendWorkerEnabled: true });
-          await startBackendWorker();
-        } else {
-          await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected, {
-            backendWorkerLastError: result.error || 'Connection failed'
-          });
-        }
-        return result;
-      })
-      .then(sendResponse)
-      .catch(async error => {
-        await stopBackendWorker(BACKEND_WORKER_STATUSES.disconnected, {
-          backendWorkerLastError: sanitizeBackendError(error.message || error)
-        }).catch(() => {});
-        sendResponse({ ok: false, error: error.message });
-      });
-
-    return true;
-  }
-
-  if (message.action === 'INBOX_LAB_JOB_RESULT') {
-    postInboxLabJobResult(message.job || {}, message.result || {}, message.backend || {})
-      .then(sendResponse)
-      .catch(error => sendResponse({ ok: false, error: error.message }));
-
-    return true;
-  }
-
   if (message.action === 'WARM_TALK_JOB_RESULT') {
     handleWarmTalkStepResult(message.job || {}, message.result || {})
       .then(sendResponse)
@@ -4863,16 +4052,6 @@ if (chrome.alarms) {
       return;
     }
 
-    if (alarm.name === BACKEND_WORKER_ALARM_NAME) {
-      // Watchdog: if Chrome killed the service worker (and with it the 5s poll
-      // interval), this alarm wakes it and syncBackendWorkerLifecycle recreates
-      // the interval and polls immediately.
-      syncBackendWorkerLifecycle().catch(error => {
-        console.warn('[Worker] Watchdog sync failed', error);
-      });
-      return;
-    }
-
     if (alarm.name === WARM_TALK_ALARM_NAME) {
       // Same watchdog role for WarmTalk: revive the tick interval after a
       // service-worker restart and immediately process any due step.
@@ -4885,12 +4064,6 @@ if (chrome.alarms) {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-
-  if (changes.backendConnectionStatus || changes.backendWorkerEnabled) {
-    syncBackendWorkerLifecycle().catch(error => {
-      console.warn('[Worker] Lifecycle sync failed', error);
-    });
-  }
 
   if (changes.warmTalkEnabled) {
     syncWarmTalkLifecycle().catch(error => {
@@ -4907,13 +4080,6 @@ chrome.runtime.onInstalled.addListener(details => {
       readTime: 6,
       selectedProvider: 'gmail',
       selectedProviders: ['gmail'],
-      backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
-      backendConnectorId: DEFAULT_BACKEND_CONNECTOR_ID,
-      backendToken: DEFAULT_BACKEND_TOKEN,
-      backendAccount: DEFAULT_BACKEND_ACCOUNT,
-      backendConnectionStatus: 'Not tested',
-      backendWorkerEnabled: true,
-      backendWorkerStatus: BACKEND_WORKER_STATUSES.disconnected,
       backDelay: 2,
       autoRefresh: true,
       enableContinuousMode: false,
@@ -4980,12 +4146,6 @@ chrome.runtime.onInstalled.addListener(details => {
     ensureContinuousAlarm().catch(error => {
       console.warn('[Continuous] Alarm re-arm failed', error);
     });
-    migrateStoredBackendConnectorDefaults().catch(error => {
-      console.warn('[Backend] Connector default migration failed', error);
-    });
-    syncBackendWorkerLifecycle().catch(error => {
-      console.warn('[Worker] Lifecycle sync failed', error);
-    });
     syncWarmTalkLifecycle().catch(error => {
       console.warn('[WarmTalk] Lifecycle sync failed', error);
     });
@@ -5003,19 +4163,9 @@ chrome.runtime.onStartup.addListener(() => {
   ensureContinuousAlarm().catch(error => {
     console.warn('[Continuous] Alarm re-arm failed', error);
   });
-  migrateStoredBackendConnectorDefaults().catch(error => {
-    console.warn('[Backend] Connector default migration failed', error);
-  });
-  syncBackendWorkerLifecycle().catch(error => {
-    console.warn('[Worker] Lifecycle sync failed', error);
-  });
   syncWarmTalkLifecycle().catch(error => {
     console.warn('[WarmTalk] Lifecycle sync failed', error);
   });
-});
-
-syncBackendWorkerLifecycle().catch(error => {
-  console.warn('[Worker] Initial lifecycle sync failed', error);
 });
 
 syncWarmTalkLifecycle().catch(error => {

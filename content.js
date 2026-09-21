@@ -2995,12 +2995,6 @@ zoho: {
     return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
   }
 
-  function getInboxLabJob() {
-    const job = settings.inboxLabJob;
-    if (!job || typeof job !== "object" || !job.id) return null;
-    return job;
-  }
-
   function getInboxLabJobFolder(job = {}) {
     const text = normalizeInboxLabText(`${job.folder || ""} ${job.instructions || ""}`);
 
@@ -3217,23 +3211,6 @@ zoho: {
     await sleep(1500);
   }
 
-  async function postInboxLabJobResult(job, result) {
-    const response = await sendRuntimeMessage({
-      action: "INBOX_LAB_JOB_RESULT",
-      provider: providerName,
-      job,
-      result,
-    });
-
-    if (!response || !response.ok) {
-      log(`[InboxLab] Result post failed: ${response?.error || "Unknown error"}`, "error");
-      return false;
-    }
-
-    log("[InboxLab] Result posted", "success");
-    return true;
-  }
-
   // Navigates to `folder` and locates the job's row, including the Gmail
   // search fallback used when paging/scrolling doesn't surface it. Shared by
   // the normal Inbox Lab flow and the WarmTalk Spam-rescue path so both use
@@ -3258,6 +3235,9 @@ zoho: {
     return row;
   }
 
+  // Targeted single-email engine: find one specific message by subject/sender
+  // and act on it. Originally written for Inbox Lab jobs; Inbox Lab is gone but
+  // WarmTalk's receive step still runs on this, so it stays.
   async function runInboxLabProviderJob(job, options = {}) {
     const tag = options.logPrefix || "[InboxLab]";
     const folder = getInboxLabProviderFolder(job);
@@ -3600,16 +3580,6 @@ zoho: {
       state = "idle";
       sendMsg("DONE", { warmTalkJobId: warmTalkJob.id });
       log("WarmTalk task complete.", "success");
-      return;
-    }
-
-    const inboxLabJob = getInboxLabJob();
-    if (inboxLabJob) {
-      const result = await runInboxLabProviderJob(inboxLabJob);
-      await postInboxLabJobResult(inboxLabJob, result);
-      state = "idle";
-      sendMsg("DONE", { inboxLabJobId: inboxLabJob.id });
-      log("Automation complete.", "success");
       return;
     }
 
@@ -4042,7 +4012,6 @@ zoho: {
         // Inbox Lab run in this tab, re-sending the warmup mail and silently
         // dropping the real job.
         warmTalkJob: msg.settings?.warmTalkJob || null,
-        inboxLabJob: msg.settings?.inboxLabJob || null,
         espMatchRules: msg.settings?.espMatchRules || null,
       };
       runAutomation().catch(async (err) => {
@@ -4057,17 +4026,6 @@ zoho: {
             account_email: warmTalkJob.account_email || "",
             summary: `WarmTalk task failed: ${err.message}`,
             error: "automation_error",
-          });
-        }
-        const inboxLabJob = getInboxLabJob();
-        if (inboxLabJob) {
-          await postInboxLabJobResult(inboxLabJob, {
-            status: "failed",
-            folder: getInboxLabProviderFolder(inboxLabJob),
-            subject: inboxLabJob.subject || "",
-            account_email: inboxLabJob.account_email || "",
-            summary: `Inbox Lab job failed: ${err.message}`,
-            error: err.message || "automation_error",
           });
         }
         state = "idle";
