@@ -122,6 +122,12 @@
         if (/\s/.test(trimmed)) notes.push("CONTAINS A SPACE OR LINE BREAK - likely copied incompletely");
         // Enough to tell one key type from another, far too little to use.
         notes.push(`starts "${trimmed.slice(0, 8)}"`);
+        // Length and prefix are identical for every key a given provider issues
+        // - every Brevo v3 key is 89 chars beginning "xkeysib-" - so on their
+        // own they cannot answer "is this the key I just pasted, or an older
+        // one still sitting in storage?". The last four characters can, and
+        // leak nothing usable, the same reasoning as a card's last four.
+        if (trimmed.length > 8) notes.push(`ends "${trimmed.slice(-4)}"`);
 
         return `${field.label}: ${notes.join(", ")}`;
       }).join(" | ");

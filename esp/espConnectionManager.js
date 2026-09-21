@@ -75,6 +75,19 @@
     const adapter = EspManager.getProvider(connection.provider);
     log(`Provider: ${adapter.label}`);
 
+    // addConnection always mints a new id, so adding the same provider twice
+    // leaves two records. Testing the older one looks identical to a bad key,
+    // so say plainly which record is under test when there is a choice.
+    const sameProvider = (await EspStorage.getConnections())
+      .filter((item) => item.provider === connection.provider);
+    if (sameProvider.length > 1) {
+      log(
+        `${sameProvider.length} ${adapter.label} connections are configured - testing "${connection.name}". ` +
+        `Remove the ones you no longer use.`,
+        'warn'
+      );
+    }
+
     try {
       const result = await adapter.testConnection(connection.credentials);
       await EspStorage.updateConnection(id, {
