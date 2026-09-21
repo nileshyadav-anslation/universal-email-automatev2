@@ -412,21 +412,19 @@
         </div>
       </div>
 
-      <!-- 2. Backend Connector Accordion -->
-      <div class="accordion-item" id="accBackendItem">
-        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accBackendContent">
+      <!-- 2. ESP Connector Accordion -->
+      <div class="accordion-item" id="accEspItem">
+        <button type="button" class="accordion-header" aria-expanded="false" aria-controls="accEspContent">
           <div class="accordion-title-wrap">
             <div class="accordion-icon-box icon-backend">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                <path d="M4 4h16v16H4z"></path>
+                <polyline points="4 7 12 13 20 7"></polyline>
               </svg>
             </div>
             <div class="accordion-titles">
-              <span class="accordion-title">Backend Connector</span>
-              <span class="accordion-subtitle">Connect this extension to Inbox Lab</span>
+              <span class="accordion-title">ESP Connector</span>
+              <span class="accordion-subtitle">Process only emails sent from your ESPs</span>
             </div>
           </div>
           <div class="accordion-header-right">
@@ -434,24 +432,52 @@
           </div>
         </button>
 
-        <div id="accBackendContent" class="accordion-content" hidden>
+        <div id="accEspContent" class="accordion-content" hidden>
           <div class="accordion-inner">
-            <div class="setting-row setting-row-stack">
-              <div class="backend-connector-grid">
-                <input type="text" id="backendBaseUrlInput" class="batch-select backend-base-url" placeholder="Server/Base URL" />
-                <input type="text" id="backendConnectorIdInput" class="batch-select" placeholder="Connector ID" />
-                <input type="password" id="backendTokenInput" class="batch-select" placeholder="Token" />
-                <input type="email" id="backendAccountInput" class="batch-select backend-account" placeholder="Account" />
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Only process ESP emails</span>
+                <span class="setting-desc">Off means every unread email is processed, as normal</span>
               </div>
-              <div class="backend-connector-actions">
-                <button class="btn settings-action" id="btnTestBackendConnection">Connect / Test</button>
-                <span class="connector-status" id="backendConnectionStatus">Not tested</span>
-              </div>
-              <div class="backend-connector-actions backend-worker-row">
-                <span class="connector-label">Worker Status</span>
-                <span class="connector-status" id="backendWorkerStatus">Disconnected</span>
+              <div class="setting-control">
+                <label class="toggle">
+                  <input type="checkbox" id="espEnabledToggle" />
+                  <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
               </div>
             </div>
+
+            <div class="setting-row">
+              <div class="setting-info">
+                <span class="setting-name">Campaign Lookback</span>
+                <span class="setting-desc">How far back to read sent campaigns</span>
+              </div>
+              <div class="setting-control">
+                <input type="number" id="espLookbackInput" min="1" max="365" value="30" class="batch-select compact-number" />
+              </div>
+            </div>
+
+            <div class="setting-row setting-row-stack">
+              <div class="setting-info">
+                <span class="setting-name">Add a connection</span>
+                <span class="setting-desc">Credentials are stored locally and never shown again</span>
+              </div>
+              <div class="esp-add-grid">
+                <select id="espProviderSelect" class="batch-select" aria-label="ESP provider"></select>
+                <input type="text" id="espNameInput" class="batch-select" placeholder="Name (optional)" />
+              </div>
+              <div id="espCredentialFields" class="esp-add-grid"></div>
+              <div id="espProviderNote" class="esp-note" hidden></div>
+              <div class="esp-actions">
+                <button class="btn settings-action" id="btnEspAdd">Add Connection</button>
+                <button class="btn settings-action" id="btnEspSyncAll">Sync All</button>
+              </div>
+            </div>
+
+            <div id="espList" class="esp-list"></div>
+            <div id="espEmpty" class="esp-empty">No ESP connected. All unread emails will be processed.</div>
+
           </div>
         </div>
       </div>

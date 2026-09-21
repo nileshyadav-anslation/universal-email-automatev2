@@ -17,13 +17,16 @@ const logEmpty    = $('logEmpty');
 const gmailAlert  = $('gmailAlert');
 const providerSelect = $('providerSelect');
 const providerCheckboxGroup = $('providerCheckboxGroup');
-const backendBaseUrlInput = $('backendBaseUrlInput');
-const backendConnectorIdInput = $('backendConnectorIdInput');
-const backendTokenInput = $('backendTokenInput');
-const backendAccountInput = $('backendAccountInput');
-const btnTestBackendConnection = $('btnTestBackendConnection');
-const backendConnectionStatus = $('backendConnectionStatus');
-const backendWorkerStatus = $('backendWorkerStatus');
+const espEnabledToggle = $('espEnabledToggle');
+const espLookbackInput = $('espLookbackInput');
+const espProviderSelect = $('espProviderSelect');
+const espNameInput = $('espNameInput');
+const espCredentialFields = $('espCredentialFields');
+const espProviderNote = $('espProviderNote');
+const btnEspAdd = $('btnEspAdd');
+const btnEspSyncAll = $('btnEspSyncAll');
+const espList = $('espList');
+const espEmpty = $('espEmpty');
 const btnExportLogs = $('btnExportLogs');
 const btnCopyLogs = $('btnCopyLogs');
 const btnClearLogs = $('btnClearLogs');
@@ -91,10 +94,6 @@ const btnDeleteAutomationTemplate = $('btnDeleteAutomationTemplate');
 const DEFAULT_SETTINGS = {
   selectedProvider: 'gmail',
   selectedProviders: ['gmail'],
-  backendBaseUrl: 'http://10.5.56.133:3000/api/anslation/product-api/knproducts/kncampaignastra/knemailastra/inbox-lab',
-  backendConnectorId: 'inbox-connector-mrdbbh2d-0pnehvxo',
-  backendToken: 'inboxlab_5tsdxevkmrdbbh2ekjemcy',
-  backendAccount: 'barjrajkumar451@gmail.com',
   readTime: 6,
   backDelay: 2,
   autoRefresh: true,
@@ -121,11 +120,6 @@ const DEFAULT_SETTINGS = {
   selectedAccounts: []
 };
 
-const LEGACY_BACKEND_BASE_URLS = [
-  'http://10.5.56.133:8000/api/knproducts/kncampaignastra/knemailastra/inbox-lab'
-];
-const LEGACY_BACKEND_CONNECTOR_IDS = ['extension-system-1'];
-const LEGACY_BACKEND_TOKENS = ['inboxlab_5tsdxevkmrddbbh2ekjemcy'];
 
 const PROVIDER_OPTIONS = [
   { id: 'gmail', label: 'Gmail' },
@@ -660,40 +654,6 @@ function validateContinuousDelayMinutes(value) {
   return parsed;
 }
 
-function normalizeBackendValue(value, fallback, legacyValues = []) {
-  const normalized = String(value || '').trim();
-  return !normalized || legacyValues.includes(normalized) ? fallback : normalized;
-}
-
-function normalizeBackendConnectorSettings(settings = {}) {
-  return {
-    backendBaseUrl: normalizeBackendValue(settings.backendBaseUrl, DEFAULT_SETTINGS.backendBaseUrl, LEGACY_BACKEND_BASE_URLS),
-    backendConnectorId: normalizeBackendValue(settings.backendConnectorId, DEFAULT_SETTINGS.backendConnectorId, LEGACY_BACKEND_CONNECTOR_IDS),
-    backendToken: normalizeBackendValue(settings.backendToken, DEFAULT_SETTINGS.backendToken, LEGACY_BACKEND_TOKENS),
-    backendAccount: normalizeBackendValue(settings.backendAccount, DEFAULT_SETTINGS.backendAccount),
-  };
-}
-
-function setBackendConnectionStatus(label = 'Not tested', state = '') {
-  backendConnectionStatus.textContent = label;
-  backendConnectionStatus.className = `connector-status ${state}`.trim();
-}
-
-function getBackendWorkerStatusClass(status = '') {
-  const normalized = String(status || '').trim().toLowerCase();
-  if (normalized === 'idle') return 'online';
-  if (normalized === 'running') return 'running';
-  if (normalized === 'paused' || normalized === 'connecting') return 'paused';
-  if (normalized === 'stopped') return '';
-  return 'offline';
-}
-
-function setBackendWorkerStatus(label = 'Disconnected') {
-  if (!backendWorkerStatus) return;
-  backendWorkerStatus.textContent = label;
-  backendWorkerStatus.className = `connector-status ${getBackendWorkerStatusClass(label)}`.trim();
-}
-
 function getProviderLabel(provider = '') {
   return PROVIDER_OPTIONS.find(item => item.id === provider)?.label || provider || 'Mail';
 }
@@ -923,11 +883,6 @@ getProviderCheckboxes().forEach((input) => {
     saveSettings();
   });
 });
-backendBaseUrlInput.addEventListener('change', saveSettings);
-backendConnectorIdInput.addEventListener('change', saveSettings);
-backendTokenInput.addEventListener('change', saveSettings);
-backendAccountInput.addEventListener('change', saveSettings);
-btnTestBackendConnection.addEventListener('click', testBackendConnection);
 autoRefreshToggle.addEventListener('change', saveSettings);
 autoStartToggle.addEventListener('change', () => {
   saveSettings();
@@ -1292,21 +1247,11 @@ function getCurrentSettings() {
   const gmailPromotionsPageLimit = validateGmailPromotionsPageLimit(gmailPromotionsPageLimitInput.value);
   const gmailInboxPageLimit = validateGmailInboxPageLimit(gmailInboxPageLimitInput.value);
   const continuousDelayMinutes = validateContinuousDelayMinutes(continuousDelayMinutesInput.value);
-  const backendConnector = normalizeBackendConnectorSettings({
-    backendBaseUrl: backendBaseUrlInput.value,
-    backendConnectorId: backendConnectorIdInput.value,
-    backendToken: backendTokenInput.value,
-    backendAccount: backendAccountInput.value,
-  });
   maxEmailsInput.value = maxEmails;
   maxLinksPerEmailInput.value = maxLinksPerEmail;
   gmailPromotionsPageLimitInput.value = gmailPromotionsPageLimit;
   gmailInboxPageLimitInput.value = gmailInboxPageLimit;
   continuousDelayMinutesInput.value = continuousDelayMinutes;
-  backendBaseUrlInput.value = backendConnector.backendBaseUrl;
-  backendConnectorIdInput.value = backendConnector.backendConnectorId;
-  backendTokenInput.value = backendConnector.backendToken;
-  backendAccountInput.value = backendConnector.backendAccount;
 
   const processDates = getProcessDateRange();
 
@@ -1315,10 +1260,6 @@ function getCurrentSettings() {
     processToDate: processDates.to,
     selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
     selectedProviders: getSelectedProviders(),
-    backendBaseUrl: backendConnector.backendBaseUrl,
-    backendConnectorId: backendConnector.backendConnectorId,
-    backendToken: backendConnector.backendToken,
-    backendAccount: backendConnector.backendAccount,
     readTime: parseInt(readTimeSlider.value) || DEFAULT_SETTINGS.readTime,
     backDelay: parseInt(backDelaySlider.value) || DEFAULT_SETTINGS.backDelay,
     autoRefresh: autoRefreshToggle.checked,
@@ -1364,12 +1305,6 @@ function loadSettings() {
   chrome.storage.local.get([
     'selectedProvider',
     'selectedProviders',
-    'backendBaseUrl',
-    'backendConnectorId',
-    'backendToken',
-    'backendAccount',
-    'backendConnectionStatus',
-    'backendWorkerStatus',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -1410,38 +1345,6 @@ function loadSettings() {
         ? data.selectedProviders
         : [data.selectedProvider || DEFAULT_SETTINGS.selectedProvider]
     );
-    const backendConnector = normalizeBackendConnectorSettings(data);
-    const storedBackendConnector = {
-      backendBaseUrl: String(data.backendBaseUrl || '').trim(),
-      backendConnectorId: String(data.backendConnectorId || '').trim(),
-      backendToken: String(data.backendToken || '').trim(),
-      backendAccount: String(data.backendAccount || '').trim(),
-    };
-    const backendConnectorMigrated = (
-      backendConnector.backendBaseUrl !== storedBackendConnector.backendBaseUrl ||
-      backendConnector.backendConnectorId !== storedBackendConnector.backendConnectorId ||
-      backendConnector.backendToken !== storedBackendConnector.backendToken ||
-      backendConnector.backendAccount !== storedBackendConnector.backendAccount
-    );
-    backendBaseUrlInput.value = backendConnector.backendBaseUrl;
-    backendConnectorIdInput.value = backendConnector.backendConnectorId;
-    backendTokenInput.value = backendConnector.backendToken;
-    backendAccountInput.value = backendConnector.backendAccount;
-    if (backendConnectorMigrated) {
-      chrome.storage.local.set({
-        ...backendConnector,
-        backendConnectionStatus: 'Not tested',
-        backendLastError: '',
-      });
-      setBackendConnectionStatus('Not tested', '');
-    } else if (data.backendConnectionStatus === 'Online') {
-      setBackendConnectionStatus('Online', 'online');
-    } else if (data.backendConnectionStatus === 'Offline') {
-      setBackendConnectionStatus('Offline', 'offline');
-    } else {
-      setBackendConnectionStatus('Not tested', '');
-    }
-    setBackendWorkerStatus(data.backendWorkerStatus || 'Disconnected');
 
     if (data.readTime)  {
       readTimeSlider.value = data.readTime;
@@ -1842,68 +1745,6 @@ async function addProxyFromForm() {
   log('Proxy saved.', 'success');
 }
 
-async function testBackendConnection() {
-  const settings = getCurrentSettings();
-
-  if (!settings.backendBaseUrl || !settings.backendConnectorId || !settings.backendToken || !settings.backendAccount) {
-    setBackendConnectionStatus('Missing values', 'offline');
-    log('Enter Backend URL, Connector ID, Token, and Account before Connect/Test.', 'warn');
-    return;
-  }
-
-  btnTestBackendConnection.disabled = true;
-  btnTestBackendConnection.textContent = 'Testing';
-  setBackendConnectionStatus('Testing...', '');
-  setBackendWorkerStatus('Connecting');
-  saveSettings();
-
-  try {
-    const result = await sendRuntimeMessage({
-      action: 'TEST_BACKEND_CONNECTOR',
-      backend: {
-        baseUrl: settings.backendBaseUrl,
-        connectorId: settings.backendConnectorId,
-        token: settings.backendToken,
-        account: settings.backendAccount,
-      },
-    });
-
-    if (result.ok) {
-      setBackendConnectionStatus('Online', 'online');
-      setBackendWorkerStatus('Idle');
-      chrome.storage.local.set({
-        backendConnectionStatus: 'Online',
-        backendLastCheck: new Date().toISOString(),
-      });
-      log(`Backend connector online (${result.method || 'request'} ${result.status || 200})`, 'success');
-      return;
-    }
-
-    setBackendConnectionStatus('Offline', 'offline');
-    setBackendWorkerStatus('Disconnected');
-    chrome.storage.local.set({
-      backendConnectionStatus: 'Offline',
-      backendLastCheck: new Date().toISOString(),
-      backendLastError: result.error || 'Connection failed',
-    });
-    log(`Backend connector failed: ${result.error || 'Connection failed'}`, 'error');
-  } catch (error) {
-    const message = error.message || 'Connection failed';
-    setBackendConnectionStatus('Offline', 'offline');
-    setBackendWorkerStatus('Disconnected');
-    chrome.storage.local.set({
-      backendConnectionStatus: 'Offline',
-      backendLastCheck: new Date().toISOString(),
-      backendLastError: message,
-    });
-    log(`Backend connector failed: ${message}`, 'error');
-  } finally {
-    if (btnTestBackendConnection.isConnected) {
-      btnTestBackendConnection.disabled = false;
-      btnTestBackendConnection.textContent = 'Connect/Test';
-    }
-  }
-}
 
 function createProxyAssignmentSelect(proxy, assignedAccountId, accountProxyMap) {
   const select = document.createElement('select');
@@ -2469,10 +2310,6 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (msg.type === 'LOG') {
     log(prefixProviderMessage(msg.message, msg.provider), msg.level || 'info', { persist: false });
-  }
-
-  if (msg.type === 'WORKER_STATUS') {
-    setBackendWorkerStatus(msg.status || 'Disconnected');
   }
 
   if (msg.type === 'ACCOUNTS_DISCOVERED') {
@@ -3116,3 +2953,271 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
+// ── ESP Connector UI ─────────────────────────────────────────────────────────
+// The popup never keeps a credential beyond the moment of submission: the
+// fields are cleared as soon as the connection is created, and the service
+// worker only ever hands back redacted records.
+
+let espProviderCatalog = [];
+
+function espSend(action, extra = {}) {
+  return sendRuntimeMessage({ action, ...extra });
+}
+
+function renderEspCredentialFields() {
+  if (!espCredentialFields || !espProviderSelect) return;
+
+  const provider = espProviderCatalog.find(p => p.id === espProviderSelect.value);
+  espCredentialFields.innerHTML = '';
+  if (!provider) return;
+
+  if (provider.comingSoon) {
+    espProviderNote.hidden = false;
+    espProviderNote.textContent = provider.note || 'Not implemented yet.';
+    btnEspAdd.disabled = true;
+    return;
+  }
+
+  espProviderNote.hidden = !provider.docsHint;
+  espProviderNote.textContent = provider.docsHint ? 'Find this in: ' + provider.docsHint : '';
+  btnEspAdd.disabled = false;
+
+  // Only the fields this particular provider needs.
+  provider.credentialFields.forEach(field => {
+    const input = document.createElement('input');
+    input.type = field.type || 'text';
+    input.className = 'batch-select';
+    input.id = 'espCred_' + field.key;
+    input.placeholder = field.placeholder || field.label;
+    input.setAttribute('aria-label', field.label);
+    espCredentialFields.appendChild(input);
+  });
+}
+
+function collectEspCredentials() {
+  const provider = espProviderCatalog.find(p => p.id === espProviderSelect.value);
+  if (!provider) return {};
+
+  const credentials = {};
+  provider.credentialFields.forEach(field => {
+    const input = $('espCred_' + field.key);
+    if (input) credentials[field.key] = input.value.trim();
+  });
+  return credentials;
+}
+
+function clearEspCredentialInputs() {
+  espCredentialFields.querySelectorAll('input').forEach(input => { input.value = ''; });
+  espNameInput.value = '';
+}
+
+function espStatusClass(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'connected') return 'proxy-status-active';
+  if (s === 'invalid credentials' || s === 'error') return 'proxy-status-not-applied';
+  if (s === 'disabled') return 'proxy-status-disabled';
+  return 'proxy-status-verified';
+}
+
+function renderEspConnections(connections) {
+  espList.innerHTML = '';
+  espEmpty.style.display = connections.length ? 'none' : 'block';
+
+  connections.forEach(connection => {
+    const provider = espProviderCatalog.find(p => p.id === connection.provider);
+    const card = document.createElement('div');
+    card.className = 'proxy-card';
+
+    const head = document.createElement('div');
+    head.className = 'proxy-card-head';
+    const title = document.createElement('span');
+    title.className = 'proxy-card-title';
+    title.textContent = connection.name || (provider && provider.label) || connection.provider;
+    const status = connection.enabled === false ? 'Disabled' : connection.status;
+    const badge = document.createElement('span');
+    badge.className = 'proxy-status ' + espStatusClass(status);
+    badge.textContent = status;
+    head.append(title, badge);
+
+    const meta = document.createElement('div');
+    meta.className = 'proxy-card-meta';
+    const bits = [(provider && provider.label) || connection.provider];
+    if (connection.accountLabel) bits.push(connection.accountLabel);
+    bits.push(connection.domains.length + ' domain(s)');
+    bits.push(connection.senders.length + ' sender(s)');
+    if (connection.lastSyncAt) bits.push('synced ' + new Date(connection.lastSyncAt).toLocaleString());
+    meta.textContent = bits.join(' | ');
+
+    const actions = document.createElement('div');
+    actions.className = 'proxy-card-actions';
+
+    const testBtn = document.createElement('button');
+    testBtn.className = 'btn settings-action';
+    testBtn.textContent = 'Test';
+    testBtn.addEventListener('click', () => espTest(connection.id, testBtn));
+
+    const syncBtn = document.createElement('button');
+    syncBtn.className = 'btn settings-action';
+    syncBtn.textContent = 'Sync';
+    syncBtn.addEventListener('click', () => espSync(connection.id, syncBtn));
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'btn settings-action';
+    toggleBtn.textContent = connection.enabled === false ? 'Enable' : 'Disable';
+    toggleBtn.addEventListener('click', async () => {
+      await espSend('ESP_SET_ENABLED', { id: connection.id, enabled: connection.enabled === false });
+      await loadEspUi();
+    });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn settings-action danger';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', async () => {
+      await espSend('ESP_REMOVE_CONNECTION', { id: connection.id });
+      log('ESP connection removed.', 'success');
+      await loadEspUi();
+    });
+
+    actions.append(testBtn, syncBtn, toggleBtn, removeBtn);
+
+    if (connection.lastError) {
+      const err = document.createElement('div');
+      err.className = 'esp-error';
+      err.textContent = connection.lastError;
+      card.append(head, meta, err, actions);
+    } else {
+      card.append(head, meta, actions);
+    }
+
+    espList.appendChild(card);
+  });
+}
+
+async function loadEspUi() {
+  if (!espProviderSelect) return;
+
+  if (!espProviderCatalog.length) {
+    const result = await espSend('ESP_LIST_PROVIDERS');
+    if (!result || !result.ok) return;
+    espProviderCatalog = result.providers || [];
+
+    espProviderSelect.innerHTML = '';
+    espProviderCatalog.forEach(provider => {
+      const option = document.createElement('option');
+      option.value = provider.id;
+      option.textContent = provider.comingSoon ? provider.label + ' (coming soon)' : provider.label;
+      espProviderSelect.appendChild(option);
+    });
+    renderEspCredentialFields();
+  }
+
+  const state = await espSend('ESP_LIST_CONNECTIONS');
+  if (!state || !state.ok) return;
+
+  espEnabledToggle.checked = Boolean(state.settings && state.settings.enabled);
+  espLookbackInput.value = (state.settings && state.settings.lookbackDays) || 30;
+  renderEspConnections(state.connections || []);
+}
+
+async function espTest(id, button) {
+  button.disabled = true;
+  button.textContent = 'Testing';
+  try {
+    const result = await espSend('ESP_TEST_CONNECTION', { id });
+    if (result && result.ok) {
+      const label = result.account && result.account.label ? ': ' + result.account.label : '';
+      log('ESP connected' + label + '.', 'success');
+    } else {
+      log('ESP test failed: ' + ((result && result.error && result.error.message) || 'Unknown error'), 'error');
+    }
+    await loadEspUi();
+  } finally {
+    if (button.isConnected) { button.disabled = false; button.textContent = 'Test'; }
+  }
+}
+
+async function espSync(id, button) {
+  button.disabled = true;
+  button.textContent = 'Syncing';
+  try {
+    const result = await espSend('ESP_SYNC_CONNECTION', { id });
+    if (result && result.ok) {
+      log('ESP synced: ' + result.campaigns + ' campaign(s), ' + result.domains + ' domain(s), ' + result.senders + ' sender(s).', 'success');
+    } else if (!result || !result.skipped) {
+      log('ESP sync failed: ' + ((result && result.error && result.error.message) || 'Unknown error'), 'error');
+    }
+    await loadEspUi();
+  } finally {
+    if (button.isConnected) { button.disabled = false; button.textContent = 'Sync'; }
+  }
+}
+
+async function saveEspSettingsFromUi() {
+  await espSend('ESP_SAVE_SETTINGS', {
+    settings: {
+      enabled: espEnabledToggle.checked,
+      lookbackDays: parseInt(espLookbackInput.value, 10) || 30,
+    },
+  });
+}
+
+if (espProviderSelect) espProviderSelect.addEventListener('change', renderEspCredentialFields);
+
+if (btnEspAdd) {
+  btnEspAdd.addEventListener('click', async () => {
+    const credentials = collectEspCredentials();
+    btnEspAdd.disabled = true;
+    try {
+      const result = await espSend('ESP_ADD_CONNECTION', {
+        payload: {
+          provider: espProviderSelect.value,
+          name: espNameInput.value.trim(),
+          credentials,
+        },
+      });
+
+      if (!result || !result.ok) {
+        log('Could not add ESP: ' + ((result && result.error && result.error.message) || 'Unknown error'), 'error');
+        return;
+      }
+
+      clearEspCredentialInputs();
+      log('ESP connection added. Run Test, then Sync to pull your campaigns.', 'success');
+      await loadEspUi();
+    } finally {
+      btnEspAdd.disabled = false;
+    }
+  });
+}
+
+if (btnEspSyncAll) {
+  btnEspSyncAll.addEventListener('click', async () => {
+    btnEspSyncAll.disabled = true;
+    btnEspSyncAll.textContent = 'Syncing';
+    try {
+      const result = await espSend('ESP_SYNC_ALL');
+      const ok = ((result && result.results) || []).filter(r => r && r.ok).length;
+      log('ESP sync complete for ' + ok + ' connection(s).', ok ? 'success' : 'warn');
+      await loadEspUi();
+    } finally {
+      btnEspSyncAll.disabled = false;
+      btnEspSyncAll.textContent = 'Sync All';
+    }
+  });
+}
+
+if (espEnabledToggle) {
+  espEnabledToggle.addEventListener('change', async () => {
+    await saveEspSettingsFromUi();
+    log(
+      espEnabledToggle.checked
+        ? 'ESP filter on: only emails from your connected ESPs will be processed.'
+        : 'ESP filter off: all unread emails will be processed.',
+      'success'
+    );
+  });
+}
+
+if (espLookbackInput) espLookbackInput.addEventListener('change', saveEspSettingsFromUi);
+
+loadEspUi().catch(() => {});

@@ -12,6 +12,26 @@ try {
   console.error('[Proxy] Failed to load proxy modules', error);
 }
 
+// ESP modules load separately from the proxy ones so a fault in either cannot
+// take out the other. Order matters: errors and the provider base first, then
+// the adapters that register themselves, then the managers that read them.
+try {
+  importScripts(
+    'esp/espErrors.js',
+    'esp/espProvider.js',
+    'esp/espStorage.js',
+    'esp/espMatcher.js',
+    'esp/providers/brevoProvider.js',
+    'esp/providers/sendgridProvider.js',
+    'esp/providers/mailchimpProvider.js',
+    'esp/providers/comingSoonProviders.js',
+    'esp/espManager.js',
+    'esp/espConnectionManager.js'
+  );
+} catch (error) {
+  console.error('[ESP] Failed to load ESP modules', error);
+}
+
 // Keep track of active Gmail tabs
 let gmailTabs = new Set();
 const CONTENT_SCRIPT_VERSION = '2026-08-19-gmail-skip-ads-v14';
@@ -1321,6 +1341,55 @@ async function prepareInboxLabJobSettings(provider = '', settings = {}) {
   return nextSettings;
 }
 
+// ── ESP ──────────────────────────────────────────────────────────────────────
+// The ESP layer is self-contained in esp/. Everything below is glue: routing
+// popup messages to it, and attaching its credential-free match rules to a run.
+
+function isEspAvailable() {
+  return Boolean(globalThis.EspConnectionManager && globalThis.EspStorage && globalThis.EspManager);
+}
+
+async function logEspEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+if (isEspAvailable()) {
+  globalThis.EspConnectionManager.setLogger((message, level) => {
+    logEspEvent(message, level).catch(() => {});
+  });
+}
+
+// Attached to settings before a run starts. Returns null whenever ESP is off,
+// unconfigured or unavailable, and the content script treats null as "process
+// everything" - so this cannot change behaviour for anyone not using it.
+async function getEspMatchRules() {
+  if (!isEspAvailable()) return null;
+
+  try {
+    const rules = await globalThis.EspConnectionManager.getMatchRules();
+    return rules && rules.enabled ? rules : null;
+  } catch (error) {
+    console.warn('[ESP] Could not build match rules; running unfiltered', error);
+    return null;
+  }
+}
+
+async function attachEspRulesToSettings(settings = {}) {
+  const espMatchRules = await getEspMatchRules();
+  if (!espMatchRules) return settings;
+
+  await logEspEvent(
+    `[ESP] Filter active: ${espMatchRules.connectionCount} connection(s), ` +
+    `${espMatchRules.domains.length} domain(s), ${espMatchRules.senders.length} sender(s), ` +
+    `${espMatchRules.subjects.length} campaign subject(s).`
+  );
+
+  return { ...settings, espMatchRules };
+}
+
 async function logProxyEvent(message, level = 'info') {
   if (!message) return;
   console.log(message);
@@ -2002,6 +2071,7 @@ async function getOrCreateMailTab(provider = 'gmail') {
 async function startAutomationFromBackground(settings = {}) {
   const selectedProvider = settings.selectedProvider || 'gmail';
   settings = await prepareInboxLabJobSettings(selectedProvider, settings);
+  settings = await attachEspRulesToSettings(settings);
   let proxyPreparedBeforeOpen = false;
   const proxyMode = getProxyApplyMode(settings);
   await warnIfProxyConfiguredButOff(settings, proxyMode);
@@ -2532,6 +2602,7 @@ async function startProviderAutomationTab(provider, settings = {}, options = {})
     sessionOpened: 0
   };
   providerSettings = await prepareInboxLabJobSettings(provider, providerSettings);
+  providerSettings = await attachEspRulesToSettings(providerSettings);
 
   const tab = await getOrCreateMailTab(provider);
 
@@ -3908,6 +3979,7 @@ async function getWarmTalkStepSettings(step) {
 async function startWarmTalkStep(step) {
   const settings = await getWarmTalkStepSettings(step);
   const tab = await getOrCreateMailTab(step.provider);
+  const espSettings = await attachEspRulesToSettings(settings);
 
   if (tab?.url && isProviderLoginUrl(tab.url, step.provider)) {
     throw new Error(getProviderLoginFailure(step.provider));
@@ -3931,7 +4003,7 @@ async function startWarmTalkStep(step) {
   }).catch(() => {});
   await setWarmTalkStatus(WARM_TALK_STATUSES.running, { warmTalkLastError: '' });
 
-  return chrome.tabs.sendMessage(tab.id, { action: 'START', settings });
+  return chrome.tabs.sendMessage(tab.id, { action: 'START', settings: espSettings });
 }
 
 /**
@@ -4582,6 +4654,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  // ── ESP messages ───────────────────────────────────────────────────────────
+  // All ESP work happens here in the service worker, never in the popup, so
+  // credentials stay out of the popup's page context entirely.
+  if (typeof message.action === 'string' && message.action.startsWith('ESP_')) {
+    (async () => {
+      if (!isEspAvailable()) {
+        return { ok: false, error: { code: 'PROVIDER_UNAVAILABLE', message: 'The ESP module failed to load.' } };
+      }
+
+      const mgr = globalThis.EspConnectionManager;
+
+      switch (message.action) {
+        case 'ESP_LIST_PROVIDERS':
+          return { ok: true, providers: globalThis.EspManager.listProviders() };
+
+        case 'ESP_LIST_CONNECTIONS':
+          return {
+            ok: true,
+            connections: await globalThis.EspStorage.getRedactedConnections(),
+            settings: await globalThis.EspStorage.getEspSettings(),
+          };
+
+        case 'ESP_ADD_CONNECTION':
+          return { ok: true, connection: await mgr.addConnection(message.payload || {}) };
+
+        case 'ESP_REMOVE_CONNECTION':
+          await mgr.removeConnection(message.id);
+          return { ok: true };
+
+        case 'ESP_SET_ENABLED':
+          await mgr.setEnabled(message.id, message.enabled);
+          return { ok: true };
+
+        case 'ESP_TEST_CONNECTION':
+          return await mgr.testConnection(message.id);
+
+        case 'ESP_SYNC_CONNECTION':
+          return await mgr.syncConnection(message.id);
+
+        case 'ESP_SYNC_ALL':
+          return { ok: true, results: await mgr.syncAll() };
+
+        case 'ESP_SAVE_SETTINGS':
+          return { ok: true, settings: await globalThis.EspStorage.saveEspSettings(message.settings || {}) };
+
+        default:
+          return { ok: false, error: { code: 'API_ERROR', message: `Unknown ESP action ${message.action}` } };
+      }
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({
+        ok: false,
+        // Adapters throw structured ESP errors; anything else is wrapped so the
+        // popup always gets the same shape.
+        error: error && error.code
+          ? { code: error.code, message: error.message }
+          : { code: 'API_ERROR', message: error?.message || 'ESP request failed.' },
+      }));
 
     return true;
   }

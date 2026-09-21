@@ -23,7 +23,10 @@
     "https://api.ipify.org/*",
     "https://api64.ipify.org/*",
     "https://mail.proton.me/*",
-    "https://mail.zoho.com/*"
+    "https://mail.zoho.com/*",
+    "https://api.brevo.com/*",
+    "https://api.sendgrid.com/*",
+    "https://*.api.mailchimp.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
@@ -57,6 +60,7 @@
         "providers/aolProvider.js",
         "providers/outlookProvider.js",
         "providers/protonProvider.js",
+        "esp/espMatcher.js",
         "content.js"
       ],
       "run_at": "document_idle"

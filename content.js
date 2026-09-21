@@ -18,6 +18,8 @@
       // Gmail's date cell carries the full date in title=, e.g.
       // "Thu, Sep 18, 2026, 1:44 PM". The visible text is relative.
       dateSelectors: ["td.xW span[title]", "span.xW span[title]", "td.xY span[title]"],
+      // Gmail puts the full address in an attribute on the sender span.
+      senderSelectors: ["span[email]", ".yW span[email]", ".bA4 span[email]"],
 
       unreadSelectors: ["tr.zA.zE", "tr.zE", "[data-thread-id].zE"],
 
@@ -40,6 +42,8 @@
     'span[title*=":"]',
     '[id$="_RECEIVED"]',
   ],
+
+  senderSelectors: ['span[title*="@"]', '[title*="@"]', '[aria-label*="@"]'],
 
   unreadSelectors: [
     '[role="option"][data-convid][aria-label*="Unread"]',
@@ -96,6 +100,7 @@ proton: {
 
   // Proton renders a real <time datetime="..."> element - the cleanest of the five.
   dateSelectors: ['time[datetime]', 'time', '[data-testid="message-row:sent-time"]'],
+  senderSelectors: ['[data-testid="message-row:sender-address"]', 'span[title*="@"]', '[title*="@"]'],
 
   // Read off a live logged-in Proton tab. A row is
   // div.item-container.item-container--row and carries data-element-id, which
@@ -197,6 +202,8 @@ zoho: {
       host: "mail.yahoo.com",
 
       dateSelectors: ['[data-test-id="message-date"]', "time[datetime]", "time"],
+      // Yahoo/AOL keep the address in a title attribute on the sender cell.
+      senderSelectors: ['[data-test-id="message-list-item-sender"] [title*="@"]', '[title*="@"]'],
 
       // ✅ Target the unread dot/indicator inside list items, not the row itself
       // unreadSelectors: [
@@ -309,6 +316,11 @@ zoho: {
         "time[datetime]",
         "time",
       ],
+
+      // AOL's /f/ UI exposes no address on the row; the title fallbacks are
+      // best-effort and simply yield nothing when absent, which the matcher
+      // treats as "cannot judge" rather than "no match".
+      senderSelectors: ['[title*="@"]', '[aria-label*="@"]'],
 
       // AOL uses same codebase as Yahoo
       // unreadSelectors: [
@@ -443,6 +455,9 @@ zoho: {
     // Empty = no date limit. "YYYY-MM-DD" as produced by <input type="date">.
     processFromDate: "",
     processToDate: "",
+    // Credential-free ESP match rules, built in the service worker. Null means
+    // no ESP configured, which leaves every email processable.
+    espMatchRules: null,
   };
   let automationTimeout = null;
   let processedHrefs = new Set();
@@ -1173,8 +1188,66 @@ zoho: {
     dateRangeUnknownCount = 0;
   }
 
+  // ── ESP filter ─────────────────────────────────────────────────────────────
+  // When ESP connections are configured, only process the emails those ESPs
+  // report having sent. Rules arrive with the START message and are already
+  // credential-free. Same fail-open discipline as the date filter: no rules,
+  // or an unreadable row, means the email is processed exactly as before.
+
+  let espSkipCount = 0;
+  let espMatchCount = 0;
+
+  function getEspRules() {
+    return settings.espMatchRules || null;
+  }
+
+  function espFilterActive() {
+    return Boolean(globalThis.EspMatcher && globalThis.EspMatcher.hasRules(getEspRules()));
+  }
+
+  function applyEspFilter(rows = []) {
+    if (!espFilterActive() || !rows.length) return rows;
+
+    const rules = getEspRules();
+    const kept = [];
+
+    for (const row of rows) {
+      let verdict;
+      try {
+        verdict = globalThis.EspMatcher.matchRow(
+          { sender: getEmailSender(row), subject: getEmailSubject(row) },
+          rules
+        );
+      } catch (error) {
+        // A matcher fault must never stop the mailbox being processed.
+        verdict = { matched: true, reason: "matcher-error", evidence: [] };
+      }
+
+      if (verdict.matched) {
+        kept.push(row);
+        if (verdict.evidence.length) espMatchCount += 1;
+      } else {
+        espSkipCount += 1;
+      }
+    }
+
+    return kept;
+  }
+
+  // Reported once per pass rather than per row.
+  function flushEspLog() {
+    if (espMatchCount > 0) {
+      log(`[ESP] Matched ${espMatchCount} email(s) from your connected ESPs.`, "success");
+    }
+    if (espSkipCount > 0) {
+      log(`[ESP] Skipped ${espSkipCount} email(s) not sent through your connected ESPs.`, "info");
+    }
+    espSkipCount = 0;
+    espMatchCount = 0;
+  }
+
   function getUnreadRows() {
-    return applyDateRangeFilter(getUnreadRowsRaw());
+    return applyEspFilter(applyDateRangeFilter(getUnreadRowsRaw()));
   }
 
   function getUnreadRowsRaw() {
@@ -2984,6 +3057,33 @@ zoho: {
   function getEmailSender(row) {
     if (!row) return "";
 
+    // The provider's own selectors go first: the original list below is
+    // Gmail-shaped and returns nothing on Yahoo, AOL, Outlook or Proton.
+    // Measured on live mailboxes.
+    const providerSelectors = Array.isArray(provider?.senderSelectors) ? provider.senderSelectors : [];
+
+    for (const selector of providerSelectors) {
+      let element = null;
+      try {
+        element = row.querySelector(selector);
+      } catch (error) {
+        continue;
+      }
+      if (!element) continue;
+
+      const value =
+        element.getAttribute("email") ||
+        element.getAttribute("title") ||
+        element.getAttribute("aria-label") ||
+        element.textContent ||
+        "";
+
+      // Prefer something that actually looks like an address - a display name
+      // is no use for ESP matching.
+      const text = String(value).trim();
+      if (text.includes("@")) return text;
+    }
+
     const senderSelectors = [
       ".yW span[email]",
       ".yW span[name]",
@@ -3575,6 +3675,7 @@ zoho: {
 
           if ((isYahooProvider() || isAolProvider() || isOutlookProvider() || isProtonProvider()) && mailboxLabel === "Spam") {
             flushDateRangeLog();
+            flushEspLog();
             log(`Finished ${mailboxLabel}.`, "success");
             break;
           }
@@ -3620,12 +3721,14 @@ zoho: {
                 }
               }
               flushDateRangeLog();
+            flushEspLog();
             log(`Finished ${mailboxLabel}.`, "success");
               break;
             }
 
           } else {
             flushDateRangeLog();
+            flushEspLog();
             log(`Finished ${mailboxLabel}.`, "success");
             break;
           }
@@ -3940,6 +4043,7 @@ zoho: {
         // dropping the real job.
         warmTalkJob: msg.settings?.warmTalkJob || null,
         inboxLabJob: msg.settings?.inboxLabJob || null,
+        espMatchRules: msg.settings?.espMatchRules || null,
       };
       runAutomation().catch(async (err) => {
         console.error("[EmailReadAutomate] Error:", err);
