@@ -6,7 +6,7 @@
   const { createEspError } = globalThis.EspErrors;
 
   // Order here is the order shown in the picker: implemented first.
-  const PROVIDER_ORDER = ["brevo", "sendgrid", "mailchimp", "mailgun", "ses"];
+  const PROVIDER_ORDER = ["brevo", "mailerlite", "klaviyo", "sendgrid", "mailchimp", "mailgun", "ses"];
 
   function registry() {
     return globalThis.EspProviderRegistry || {};

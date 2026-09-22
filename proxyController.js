@@ -42,6 +42,32 @@
     return PROXY_PROTOCOLS.has(normalized) ? normalized : "http";
   }
 
+  // Hosts that must never go through a mailbox proxy.
+  //
+  // ESP APIs are the extension's own control-plane traffic, not mailbox
+  // traffic, and routing them through a rotating proxy breaks them two ways:
+  // providers that pin API keys to authorised IPs (Brevo does) reject every
+  // call from a changing address, and a dead proxy takes the ESP layer down
+  // with it. Sending them direct keeps the source IP stable and independent of
+  // whatever the mail run is doing.
+  //
+  // Private ranges are here for the same reason: `<local>` only covers
+  // hostnames with no dot, so a LAN address like 10.5.56.133 was being sent to
+  // the proxy, which cannot reach it.
+  const ALWAYS_BYPASS = [
+    "<local>",
+    "localhost",
+    "127.0.0.1",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "api.brevo.com",
+    "api.sendgrid.com",
+    "*.api.mailchimp.com",
+    "connect.mailerlite.com",
+    "a.klaviyo.com",
+  ];
+
   function buildProxyConfig(proxy) {
     const port = parseInt(proxy?.port, 10);
 
@@ -57,7 +83,7 @@
           host: proxy.host,
           port,
         },
-        bypassList: ["<local>"],
+        bypassList: [...ALWAYS_BYPASS],
       },
     };
   }

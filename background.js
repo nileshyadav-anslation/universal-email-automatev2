@@ -22,6 +22,8 @@ try {
     'esp/espStorage.js',
     'esp/espMatcher.js',
     'esp/providers/brevoProvider.js',
+    'esp/providers/mailerliteProvider.js',
+    'esp/providers/klaviyoProvider.js',
     'esp/providers/sendgridProvider.js',
     'esp/providers/mailchimpProvider.js',
     'esp/providers/comingSoonProviders.js',

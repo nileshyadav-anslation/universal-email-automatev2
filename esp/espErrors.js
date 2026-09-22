@@ -52,6 +52,14 @@
   // identical and sent debugging down the wrong path.
   function providerDetail(body) {
     if (!body || typeof body !== "object") return "";
+
+    // JSON:API shape, which Klaviyo uses: {"errors":[{"detail":"...","title":"..."}]}
+    if (Array.isArray(body.errors) && body.errors.length) {
+      const first = body.errors[0] || {};
+      const text = String(first.detail || first.title || first.message || "").trim();
+      if (text) return text;
+    }
+
     return String(body.message || body.error || body.error_description || "").trim();
   }
 
