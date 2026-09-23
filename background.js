@@ -3997,6 +3997,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'LICENSE_DEACTIVATE': {
+          // Stop first, then release the seat. The other order would free the
+          // seat on the server while this profile carried on reading mail,
+          // which is the exact state the seat count exists to prevent.
+          await cancelPendingManualStart('The profile was deactivated.').catch(() => {});
+          await controlProviderAutomations('STOP', []).catch(() => null);
           await gate.deactivate();
           return { ok: true, ...(await gate.getStatus()) };
         }

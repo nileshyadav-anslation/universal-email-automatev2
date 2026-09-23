@@ -3354,6 +3354,7 @@ const licenseMessage = $('licenseMessage');
 const licenseDeviceLabel = $('licenseDeviceLabel');
 const licenseStrip = $('licenseStrip');
 const licenseLoading = $('licenseLoading');
+const btnLicenseDeactivate = $('btnLicenseDeactivate');
 
 function showLicenseMessage(text, tone = 'error') {
   if (!licenseMessage) return;
@@ -3379,7 +3380,14 @@ function renderLicenseStrip(status) {
 
   if (!access.allowed) {
     licenseStrip.hidden = true;
+    if (btnLicenseDeactivate) btnLicenseDeactivate.hidden = true;
     return;
+  }
+
+  // Only an activated profile has a seat to give back.
+  if (btnLicenseDeactivate) {
+    btnLicenseDeactivate.hidden = false;
+    disarmDeactivate();
   }
 
   const bits = [];
@@ -3475,6 +3483,53 @@ if (btnLicenseActivate) {
     } finally {
       btnLicenseActivate.disabled = false;
       btnLicenseActivate.textContent = 'Activate';
+    }
+  });
+}
+
+// Deactivation asks for a second click rather than a native confirm(), which
+// can dismiss the popup on some platforms and take the answer with it. The
+// armed state times out so a forgotten popup cannot be confirmed by accident
+// much later.
+let deactivateArmed = false;
+let deactivateTimer = null;
+
+function disarmDeactivate() {
+  deactivateArmed = false;
+  if (deactivateTimer) { clearTimeout(deactivateTimer); deactivateTimer = null; }
+  if (!btnLicenseDeactivate) return;
+  btnLicenseDeactivate.classList.remove('armed');
+  btnLicenseDeactivate.textContent = 'Deactivate this profile';
+}
+
+if (btnLicenseDeactivate) {
+  btnLicenseDeactivate.addEventListener('click', async () => {
+    if (!deactivateArmed) {
+      deactivateArmed = true;
+      btnLicenseDeactivate.classList.add('armed');
+      btnLicenseDeactivate.textContent = 'Click again to release this seat';
+      deactivateTimer = setTimeout(disarmDeactivate, 6000);
+      return;
+    }
+
+    disarmDeactivate();
+    btnLicenseDeactivate.disabled = true;
+    btnLicenseDeactivate.textContent = 'Releasing...';
+
+    try {
+      const result = await sendRuntimeMessage({ action: 'LICENSE_DEACTIVATE' });
+      if (result && result.ok) {
+        log('This profile has been deactivated and its seat released.', 'success');
+        applyLicenseStatus(result);
+        showLicenseMessage('This profile has been deactivated. Activate it again to continue.', 'warn');
+        return;
+      }
+      log(`Deactivation failed. ${(result && result.error) || ''}`.trim(), 'error');
+    } catch (error) {
+      log(`Deactivation failed. ${error?.message || ''}`.trim(), 'error');
+    } finally {
+      btnLicenseDeactivate.disabled = false;
+      disarmDeactivate();
     }
   });
 }
