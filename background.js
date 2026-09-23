@@ -49,6 +49,14 @@ const CONTINUOUS_ALARM_NAME = 'emailReadAutomate.continuousLoop';
 const AUTO_START_ALARM_NAME = 'emailReadAutomate.autoStart';
 // Spread over 30-60s so profiles the launcher opened in quick succession do not
 // all load their mailboxes at the same moment.
+// Manual Start can be held back so an operator can click Start across ~10
+// Chrome profiles without the first one racing away while they are still
+// clicking. Entirely separate from auto-start, which keeps its own random
+// 30-60s and is not affected by any of this.
+const MANUAL_START_ALARM_NAME = 'emailReadAutomate.manualStart';
+const DEFAULT_MANUAL_START_DELAY_SECONDS = 30;
+const MAX_MANUAL_START_DELAY_SECONDS = 300;
+
 const AUTO_START_MIN_DELAY_SECONDS = 30;
 const AUTO_START_MAX_DELAY_SECONDS = 60;
 // Right after a laptop boots, Wi-Fi is often not connected yet, so an early
@@ -89,6 +97,10 @@ const DEFAULT_AUTOMATION_SETTINGS = {
   enableAccountSwitching: false,
   enableProxyManager: false,
   allowProxyFallback: false,
+  // Seconds to hold a MANUAL Start before the run begins, so several profiles
+  // can be started without the first racing ahead. 0 starts immediately.
+  // Auto-start ignores this and keeps its own random delay.
+  manualStartDelaySeconds: DEFAULT_MANUAL_START_DELAY_SECONDS,
   // Empty = no date limit. "YYYY-MM-DD", straight from <input type="date">.
   processFromDate: '',
   processToDate: '',
@@ -119,6 +131,7 @@ const AUTOMATION_SETTING_STORAGE_KEYS = [
   'enableAccountSwitching',
   'enableProxyManager',
   'allowProxyFallback',
+  'manualStartDelaySeconds',
   'processFromDate',
   'processToDate',
   'proxyApplyMode',
@@ -1038,6 +1051,9 @@ async function prepareGlobalProxy(settings = {}) {
 }
 
 async function clearProxyForStop() {
+  // A scheduled start must die with Stop, otherwise pressing Stop appears to do
+  // nothing and the run begins anyway a few seconds later.
+  await cancelPendingManualStart().catch(() => {});
   setActiveProxyLogContext(null);
 
   if (!isProxyManagerAvailable()) return;
@@ -2254,21 +2270,20 @@ async function clearProcessedHistory() {
   return { ok: true, tabsNotified: mailTabs.length };
 }
 
+// The content-script file list lives in exactly one place: the manifest. It was
+// duplicated here and in the popup, and when esp/espMatcher.js was added to the
+// manifest both copies were missed - so a re-injected tab silently ran without
+// the ESP matcher and processed every email, with nothing in the log to say so.
+function getContentScriptFiles() {
+  const declared = chrome.runtime.getManifest().content_scripts || [];
+  const files = declared.length && Array.isArray(declared[0].js) ? declared[0].js.slice() : [];
+  return files.length ? files : ['content.js'];
+}
+
 async function injectAutomationScripts(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: [
-      'linkProcessor.js',
-      'replyEngine.js',
-      'composeEngine.js',
-      'processedEmailManager.js',
-      'providers/gmailProvider.js',
-      'providers/yahooProvider.js',
-      'providers/aolProvider.js',
-      'providers/outlookProvider.js',
-      'providers/protonProvider.js',
-      'content.js'
-    ]
+    files: getContentScriptFiles()
   });
 }
 
@@ -2277,16 +2292,39 @@ async function pingAutomationScript(tabId) {
   return ping && ping.ok ? ping : null;
 }
 
+// A tab is only healthy if it answers, reports the current version, AND is
+// carrying every companion script. The version string identifies content.js
+// alone, so a tab injected before a new sibling was added to the manifest
+// answers "current" while silently missing it - which is how the ESP matcher
+// went absent without a word in the log.
+function pingIsHealthy(ping) {
+  if (!ping || ping.version !== CONTENT_SCRIPT_VERSION) return false;
+
+  const modules = ping.modules;
+  // An older content.js predates module reporting; the version check is all
+  // there is for those, and reloading every such tab would be worse.
+  if (!modules) return true;
+
+  return Object.values(modules).every(Boolean);
+}
+
 async function ensureAutomationScripts(tabId) {
   let ping = await pingAutomationScript(tabId);
-  if (ping && ping.version === CONTENT_SCRIPT_VERSION) return;
+  if (pingIsHealthy(ping)) return;
+
+  if (ping && ping.version === CONTENT_SCRIPT_VERSION) {
+    const missing = Object.entries(ping.modules || {})
+      .filter(([, present]) => !present)
+      .map(([name]) => name);
+    console.warn('[Automation] Tab is missing content scripts, reloading:', missing.join(', '));
+  }
 
   // No answer at all. Give a slow page one more chance before doing anything
   // heavier — on a slow machine the script may simply not have run yet.
   if (!ping) {
     await delay(1500);
     ping = await pingAutomationScript(tabId);
-    if (ping && ping.version === CONTENT_SCRIPT_VERSION) return;
+    if (pingIsHealthy(ping)) return;
   }
 
   // Reload for a version mismatch, and also for a still-silent tab. A silent tab
@@ -2300,7 +2338,7 @@ async function ensureAutomationScripts(tabId) {
   await delay(2500);
 
   const freshPing = await pingAutomationScript(tabId);
-  if (freshPing && freshPing.version === CONTENT_SCRIPT_VERSION) return;
+  if (pingIsHealthy(freshPing)) return;
 
   await injectAutomationScripts(tabId);
 }
@@ -3705,6 +3743,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'START_AUTOMATION') {
     const settings = getContinuousRunSettings(message.settings || {});
     const selectedProviders = getSelectedProvidersFromSettings(settings);
+    const delaySeconds = normalizeManualStartDelay(
+      message.settings?.manualStartDelaySeconds ?? DEFAULT_MANUAL_START_DELAY_SECONDS
+    );
+
+    // Anything above zero is scheduled instead, so an operator can click Start
+    // across several profiles without the first one running away. Zero falls
+    // through to exactly the original immediate path.
+    if (delaySeconds > 0) {
+      cancelPendingManualStart()
+        .then(() => scheduleManualStart(message.settings || {}, delaySeconds))
+        .then(sendResponse)
+        .catch(error => sendResponse({ ok: false, error: error.message }));
+
+      return true;
+    }
 
     reclaimDeadAutomationState()
       .catch(() => false)
@@ -3714,6 +3767,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await handleAutomationStartFailure(error, selectedProviders);
         sendResponse({ ok: false, error: error.message });
       });
+
+    return true;
+  }
+
+  if (message.action === 'GET_PENDING_START') {
+    getPendingManualStart()
+      .then(pending => sendResponse({ ok: true, pending }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  if (message.action === 'CANCEL_PENDING_START') {
+    cancelPendingManualStart(message.reason || '')
+      .then(() => sendResponse({ ok: true }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
 
     return true;
   }
@@ -3950,6 +4019,95 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+async function logManualStartEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+function normalizeManualStartDelay(value) {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_MANUAL_START_DELAY_SECONDS;
+  return Math.min(parsed, MAX_MANUAL_START_DELAY_SECONDS);
+}
+
+async function getPendingManualStart() {
+  const data = await getStorage(['pendingManualStart']);
+  const pending = data.pendingManualStart;
+  return pending && pending.startAt ? pending : null;
+}
+
+async function cancelPendingManualStart(reason = '') {
+  await chrome.alarms.clear(MANUAL_START_ALARM_NAME).catch(() => false);
+  await chrome.storage.local.remove('pendingManualStart').catch(() => {});
+  if (reason) await logManualStartEvent(`[Start] Scheduled start cancelled. ${reason}`, 'info');
+}
+
+// The settings are captured at click time and stored, so the run that
+// eventually fires is the one the operator configured - not whatever the popup
+// happens to hold a minute later. An alarm rather than setTimeout because the
+// service worker is torn down constantly and a timer would vanish with it.
+async function scheduleManualStart(settings = {}, delaySeconds = DEFAULT_MANUAL_START_DELAY_SECONDS) {
+  const delay = normalizeManualStartDelay(delaySeconds);
+  const startAt = Date.now() + delay * 1000;
+
+  await chrome.storage.local.set({
+    pendingManualStart: { startAt, delaySeconds: delay, settings }
+  });
+
+  // Chrome clamps alarms below a minute in some contexts, so fall back to a
+  // timer as well; whichever fires first wins and the other finds nothing to do.
+  await chrome.alarms.create(MANUAL_START_ALARM_NAME, { when: startAt });
+  setTimeout(() => {
+    runPendingManualStart().catch(error => {
+      logManualStartEvent(`[Start] Scheduled start failed: ${error.message}`, 'error').catch(() => {});
+    });
+  }, delay * 1000);
+
+  await logManualStartEvent(`[Start] Automation will begin in ${delay}s. Press Stop to cancel.`, 'success');
+  return { ok: true, scheduled: true, startAt, delaySeconds: delay };
+}
+
+let manualStartInFlight = false;
+
+async function runPendingManualStart() {
+  if (manualStartInFlight) return;
+
+  const pending = await getPendingManualStart();
+  if (!pending) return;
+  if (Date.now() < pending.startAt - 1500) return; // fired early; the real one is still coming
+
+  manualStartInFlight = true;
+  try {
+    await chrome.alarms.clear(MANUAL_START_ALARM_NAME).catch(() => false);
+    await chrome.storage.local.remove('pendingManualStart').catch(() => {});
+
+    // Same guard auto-start uses: never stack a second run on a live one.
+    await reclaimDeadAutomationState().catch(() => false);
+    const busy = await getStorage(['automationState', 'providerAutomationStates']);
+    if (isAutomationBusyFromStorage(busy) || await isAutomationSessionActive()) {
+      await logManualStartEvent('[Start] Automation is already running in this profile; scheduled start skipped.', 'warn');
+      return;
+    }
+
+    const settings = getContinuousRunSettings(pending.settings || {});
+    const providers = getSelectedProvidersFromSettings(settings);
+
+    await logManualStartEvent(`[Start] Starting automation for ${providers.map(getProviderLabel).join(', ')}.`, 'success');
+
+    try {
+      await startAutomationEntryPoint(settings);
+      await chrome.storage.local.set({ automationStartedAt: Date.now() }).catch(() => {});
+    } catch (error) {
+      await handleAutomationStartFailure(error, providers);
+      await logManualStartEvent(`[Start] Failed: ${error.message}`, 'error');
+    }
+  } finally {
+    manualStartInFlight = false;
+  }
+}
+
 async function logAutoStartEvent(message, level = 'info') {
   if (!message) return;
   console.log(message);
@@ -4040,6 +4198,13 @@ async function runAutoStart() {
 
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === MANUAL_START_ALARM_NAME) {
+      runPendingManualStart().catch(error => {
+        logManualStartEvent(`[Start] Scheduled start failed: ${error.message}`, 'error').catch(() => {});
+      });
+      return;
+    }
+
     if (alarm.name === AUTO_START_ALARM_NAME) {
       runAutoStart().catch(error => {
         logAutoStartEvent(`[AutoStart] Failed: ${error.message}`, 'error').catch(() => {});

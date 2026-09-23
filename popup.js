@@ -53,6 +53,7 @@ const gmailPromotionsToggle = $('gmailPromotionsToggle');
 const gmailPromotionsPageLimitInput = $('gmailPromotionsPageLimitInput');
 const gmailInboxPageLimitInput = $('gmailInboxPageLimitInput');
 const maxEmailsInput = $('maxEmailsInput');
+const manualStartDelayInput = $('manualStartDelayInput');
 const processFromDateInput = $('processFromDate');
 const processToDateInput = $('processToDate');
 const btnClearProcessDates = $('btnClearProcessDates');
@@ -94,6 +95,10 @@ const btnDeleteAutomationTemplate = $('btnDeleteAutomationTemplate');
 const DEFAULT_SETTINGS = {
   selectedProvider: 'gmail',
   selectedProviders: ['gmail'],
+  manualStartDelaySeconds: 30,
+  // Empty means no date limit - every unread email is processed.
+  processFromDate: '',
+  processToDate: '',
   readTime: 6,
   backDelay: 2,
   autoRefresh: true,
@@ -988,6 +993,12 @@ function onProcessDateChanged() {
   log(`Date range set: only emails ${range} will be processed.`, 'success');
 }
 
+if (manualStartDelayInput) {
+  manualStartDelayInput.addEventListener('change', () => {
+    manualStartDelayInput.value = validateManualStartDelay(manualStartDelayInput.value);
+    saveSettings();
+  });
+}
 if (processFromDateInput) processFromDateInput.addEventListener('change', onProcessDateChanged);
 if (processToDateInput) processToDateInput.addEventListener('change', onProcessDateChanged);
 
@@ -1220,6 +1231,12 @@ function deleteSelectedAutomationTemplate() {
 }
 
 // "YYYY-MM-DD" or "". Anything else is treated as no limit.
+function validateManualStartDelay(value) {
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return 30;
+  return Math.min(parsed, 300);
+}
+
 function normalizeProcessDate(value) {
   const text = String(value || '').trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
@@ -1254,8 +1271,13 @@ function getCurrentSettings() {
   continuousDelayMinutesInput.value = continuousDelayMinutes;
 
   const processDates = getProcessDateRange();
+  const manualStartDelaySeconds = validateManualStartDelay(
+    manualStartDelayInput ? manualStartDelayInput.value : 30
+  );
+  if (manualStartDelayInput) manualStartDelayInput.value = manualStartDelaySeconds;
 
   return {
+    manualStartDelaySeconds,
     processFromDate: processDates.from,
     processToDate: processDates.to,
     selectedProvider: getSelectedProviders()[0] || DEFAULT_SETTINGS.selectedProvider,
@@ -1305,6 +1327,9 @@ function loadSettings() {
   chrome.storage.local.get([
     'selectedProvider',
     'selectedProviders',
+    'manualStartDelaySeconds',
+    'processFromDate',
+    'processToDate',
     'readTime',
     'backDelay',
     'autoRefresh',
@@ -1379,6 +1404,21 @@ function loadSettings() {
     }
     if (data.maxEmails !== undefined) {
       maxEmailsInput.value = validateMaxEmails(data.maxEmails);
+    }
+    // Without this the inputs render blank on every open, and because
+    // getCurrentSettings reads the inputs, the next save of ANY control writes
+    // those blanks back and the saved range is gone. Requesting the keys from
+    // storage is not enough on its own - they have to reach the DOM.
+    if (manualStartDelayInput) {
+      manualStartDelayInput.value = validateManualStartDelay(
+        data.manualStartDelaySeconds === undefined ? 30 : data.manualStartDelaySeconds
+      );
+    }
+    if (processFromDateInput) {
+      processFromDateInput.value = normalizeProcessDate(data.processFromDate);
+    }
+    if (processToDateInput) {
+      processToDateInput.value = normalizeProcessDate(data.processToDate);
     }
     maxLinksPerEmailInput.value = validateMaxLinksPerEmail(
       data.maxLinksPerEmail !== undefined ? data.maxLinksPerEmail : DEFAULT_SETTINGS.maxLinksPerEmail
@@ -2036,24 +2076,29 @@ async function loadProxyManagerUi() {
   renderProxyList(proxies, accountProxyMap);
 }
 
+// Same list as the manifest declares - read from it rather than duplicated, so
+// adding a content script can never leave a re-injected tab half-equipped.
+function getContentScriptFiles() {
+  const declared = chrome.runtime.getManifest().content_scripts || [];
+  const files = declared.length && Array.isArray(declared[0].js) ? declared[0].js.slice() : [];
+  return files.length ? files : ['content.js'];
+}
+
 async function ensureContentScript(tabId) {
   const ping = await chrome.tabs.sendMessage(tabId, { action: 'PING' }).catch(() => null);
-  if (ping && ping.ok) return;
+
+  // A reply alone is not enough: a tab can answer while missing a companion
+  // script that was added to the manifest after it was injected. That is how
+  // the ESP matcher went absent. Re-inject unless every reported module is
+  // present. A tab whose content.js predates module reporting keeps the old
+  // behaviour rather than being re-injected on every popup open.
+  const healthy = Boolean(ping && ping.ok) &&
+    (!ping.modules || Object.values(ping.modules).every(Boolean));
+  if (healthy) return;
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: [
-      'linkProcessor.js',
-      'replyEngine.js',
-      'composeEngine.js',
-      'processedEmailManager.js',
-      'providers/gmailProvider.js',
-      'providers/yahooProvider.js',
-      'providers/aolProvider.js',
-      'providers/outlookProvider.js',
-      'providers/protonProvider.js',
-      'content.js'
-    ]
+    files: getContentScriptFiles()
   });
 }
 
@@ -2214,6 +2259,15 @@ btnStart.addEventListener('click', async () => {
     }
 
     gmailAlert.style.display = 'none';
+
+    // A scheduled start has not begun yet - show the countdown rather than
+    // claiming success, or Stop would look broken and the operator would not
+    // know whether the profile is armed.
+    if (response.scheduled) {
+      beginPendingStartCountdown(response.startAt);
+      return;
+    }
+
     chrome.storage.local.set({ automationStartedAt: Date.now() });
     if (response.mode === 'multi-provider') {
       const started = (response.results || []).filter(result => result.ok).map(result => getProviderLabel(result.provider));
@@ -2244,7 +2298,16 @@ btnPause.addEventListener('click', async () => {
 
 btnStop.addEventListener('click', async () => {
   setStatus('stopped', 'Stopped');
-  log('Automation stopped', 'error');
+
+  // Stop has to kill a countdown too, or it appears to do nothing and the run
+  // begins anyway a few seconds later.
+  const hadPendingStart = pendingStartTimer !== null;
+  renderStartButtonIdle();
+  if (hadPendingStart) {
+    await sendRuntimeMessage({ action: 'CANCEL_PENDING_START', reason: 'Stopped before it began.' }).catch(() => null);
+  }
+
+  log(hadPendingStart ? 'Scheduled start cancelled' : 'Automation stopped', 'error');
   btnPause.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>Pause`;
   await sendRuntimeMessage({ action: 'STOP_AUTOMATION_ALL', providers: getSelectedProviders() });
   chrome.storage.local.set({ automationState: 'stopped', automationStartedAt: null });
@@ -3221,3 +3284,59 @@ if (espEnabledToggle) {
 if (espLookbackInput) espLookbackInput.addEventListener('change', saveEspSettingsFromUi);
 
 loadEspUi().catch(() => {});
+
+// ── Scheduled start countdown ────────────────────────────────────────────────
+// A manual Start can be held for a few seconds so several Chrome profiles can
+// be started one after another without the first racing ahead. While it is
+// pending the Start button becomes a live countdown and Stop cancels it.
+
+let pendingStartTimer = null;
+
+function clearPendingStartCountdown() {
+  if (pendingStartTimer) {
+    clearInterval(pendingStartTimer);
+    pendingStartTimer = null;
+  }
+}
+
+function renderStartButtonIdle() {
+  clearPendingStartCountdown();
+  btnStart.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>Start';
+  btnStart.disabled = false;
+}
+
+function beginPendingStartCountdown(startAt) {
+  clearPendingStartCountdown();
+  if (!startAt) return;
+
+  setStatus('scheduled', 'Starting soon');
+  btnStart.disabled = true;
+  btnStop.disabled = false;
+
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((startAt - Date.now()) / 1000));
+    if (left <= 0) {
+      clearPendingStartCountdown();
+      btnStart.disabled = true;
+      setStatus('running', 'Running');
+      return;
+    }
+    const mm = Math.floor(left / 60);
+    const ss = String(left % 60).padStart(2, '0');
+    btnStart.textContent = mm > 0 ? `Starting in ${mm}:${ss}` : `Starting in ${left}s`;
+  };
+
+  tick();
+  pendingStartTimer = setInterval(tick, 1000);
+}
+
+// A pending start lives in the service worker, so reopening the popup has to
+// pick the countdown back up rather than showing an idle Start button.
+async function restorePendingStartCountdown() {
+  const result = await sendRuntimeMessage({ action: 'GET_PENDING_START' }).catch(() => null);
+  if (result && result.ok && result.pending && result.pending.startAt > Date.now()) {
+    beginPendingStartCountdown(result.pending.startAt);
+  }
+}
+
+restorePendingStartCountdown().catch(() => {});

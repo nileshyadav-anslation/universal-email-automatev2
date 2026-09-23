@@ -4098,7 +4098,20 @@ zoho: {
     }
 
     if (msg.action === "PING") {
-      sendResponse({ ok: true, version: CONTENT_SCRIPT_VERSION, provider: providerName });
+      sendResponse({
+        ok: true,
+        version: CONTENT_SCRIPT_VERSION,
+        provider: providerName,
+        // Which companion scripts actually made it into this tab. A tab can
+        // hold a correct content.js yet be missing a sibling that was added to
+        // the manifest later, and the version string alone cannot tell -
+        // it reports content.js, not the set around it.
+        modules: {
+          espMatcher: Boolean(globalThis.EspMatcher),
+          linkProcessor: Boolean(globalThis.LinkProcessor),
+          replyEngine: Boolean(globalThis.ReplyEngine),
+        },
+      });
       return false;
     }
   });
