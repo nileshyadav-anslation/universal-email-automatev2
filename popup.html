@@ -7,7 +7,46 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app">
+  <!-- Visible on first paint so the popup never flashes blank or shows the
+       activation screen to an already-activated user while the check runs. -->
+  <div class="license-loading" id="licenseLoading">Checking subscription...</div>
+
+  <!-- Shown until this profile is activated. The rest of the popup stays
+       hidden so nothing can be configured or started before then. -->
+  <div class="app license-screen" id="licenseScreen" hidden>
+    <header class="header">
+      <div class="logo-wrap">
+        <div class="logo-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 8L10.89 13.26C11.2187 13.4793 11.6049 13.5963 12 13.5963C12.3951 13.5963 12.7813 13.4793 13.11 13.26L21 8M5 19H19C19.5304 19 20.0391 18.7893 20.4142 18.4142C20.7893 18.0391 21 17.5304 21 17V7C21 6.46957 20.7893 5.96086 20.4142 5.58579C20.0391 5.21071 19.5304 5 19 5H5C4.46957 5 3.96086 5.21071 3.58579 5.58579C3.21071 5.96086 3 6.46957 3 7V17C3 17.5304 3.21071 18.0391 3.58579 18.4142C3.96086 18.7893 4.46957 19 5 19Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="logo-text">
+          <span class="brand">Email Read</span>
+          <span class="brand-accent">Automate</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="card-label">Activate this profile</div>
+      <p class="license-intro">Enter the email your subscription was bought with, and the licence key sent to you.</p>
+
+      <div class="license-form">
+        <input type="email" id="licenseEmailInput" class="batch-select" placeholder="you@company.com" autocomplete="email" />
+        <input type="text" id="licenseKeyInput" class="batch-select" placeholder="Licence key" autocomplete="off" spellcheck="false" />
+        <button class="btn btn-start" id="btnLicenseActivate">Activate</button>
+      </div>
+
+      <div class="license-message" id="licenseMessage" hidden></div>
+
+      <div class="license-foot">
+        <span id="licenseDeviceLabel">This profile counts as one activation.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="app" id="appMain" hidden>
 
     <!-- Header -->
     <header class="header">
@@ -1213,6 +1252,7 @@
     <!-- Footer -->
     <footer class="footer">
       <span>Email Read Automate v1.0.0(v2)</span>
+      <span class="license-strip" id="licenseStrip" hidden></span>
     </footer>
   </div>
 

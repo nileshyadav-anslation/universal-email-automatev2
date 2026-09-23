@@ -17,6 +17,9 @@ try {
 // the adapters that register themselves, then the managers that read them.
 try {
   importScripts(
+    'license/licenseStorage.js',
+    'license/licenseClient.js',
+    'license/licenseGate.js',
     'esp/espErrors.js',
     'esp/espProvider.js',
     'esp/espStorage.js',
@@ -585,6 +588,53 @@ async function startAutomationEntryPoint(settings = {}) {
 
   await setContinuousModeActive(continuousSettings);
   return starter(runSettings);
+}
+
+// ── Licence ──────────────────────────────────────────────────────────────────
+// One question, asked at every point a run can begin. The gate itself lives in
+// license/; this is only the wiring.
+
+function isLicenseAvailable() {
+  return Boolean(globalThis.LicenseGate);
+}
+
+async function logLicenseEvent(message, level = 'info') {
+  if (!message) return;
+  console.log(message);
+  chrome.runtime.sendMessage({ type: 'LOG', message, level }).catch(() => {});
+  await addActivityLogEntry(message, level).catch(() => {});
+}
+
+if (isLicenseAvailable()) {
+  globalThis.LicenseGate.setLogger((message, level) => {
+    logLicenseEvent(message, level).catch(() => {});
+  });
+}
+
+// Every start path funnels through here. Returns null when the run may proceed,
+// or an error message when it may not. If the licence module failed to load the
+// run is allowed - a broken gate must not brick a paying customer's fleet.
+async function blockIfUnlicensed(context = 'Automation') {
+  if (!isLicenseAvailable()) return null;
+
+  try {
+    const access = await globalThis.LicenseGate.canRun();
+    if (access.allowed) {
+      // Surface a running-down grace period rather than letting it expire
+      // silently mid-fleet.
+      if (access.status === 'stale' && access.message) {
+        await logLicenseEvent(`[License] ${access.message}`, 'warn');
+      }
+      return null;
+    }
+
+    const message = access.message || 'This profile is not activated.';
+    await logLicenseEvent(`[License] ${context} blocked. ${message}`, 'error');
+    return message;
+  } catch (error) {
+    console.warn('[License] Gate check failed; allowing the run', error);
+    return null;
+  }
 }
 
 // ── ESP ──────────────────────────────────────────────────────────────────────
@@ -2084,6 +2134,8 @@ async function controlProviderAutomations(action, providers = []) {
 }
 
 async function startContinuousAutomationCycle() {
+  if (await blockIfUnlicensed('Continuous mode')) return;
+
   const data = await getStorage([
     'settings',
     'automationState',
@@ -3750,18 +3802,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Anything above zero is scheduled instead, so an operator can click Start
     // across several profiles without the first one running away. Zero falls
     // through to exactly the original immediate path.
-    if (delaySeconds > 0) {
-      cancelPendingManualStart()
-        .then(() => scheduleManualStart(message.settings || {}, delaySeconds))
-        .then(sendResponse)
-        .catch(error => sendResponse({ ok: false, error: error.message }));
+    blockIfUnlicensed('Start')
+      .then(blocked => {
+        if (blocked) return { ok: false, error: blocked, unlicensed: true };
 
-      return true;
-    }
+        if (delaySeconds > 0) {
+          return cancelPendingManualStart()
+            .then(() => scheduleManualStart(message.settings || {}, delaySeconds));
+        }
 
-    reclaimDeadAutomationState()
-      .catch(() => false)
-      .then(() => startAutomationEntryPoint(settings))
+        return reclaimDeadAutomationState()
+          .catch(() => false)
+          .then(() => startAutomationEntryPoint(settings));
+      })
       .then(sendResponse)
       .catch(async error => {
         await handleAutomationStartFailure(error, selectedProviders);
@@ -3914,6 +3967,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .then(sendResponse)
       .catch(error => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
+  // ── Licence messages ───────────────────────────────────────────────────────
+  // All licence work happens in the service worker, so the licence key never
+  // lives in the popup's page context.
+  if (typeof message.action === 'string' && message.action.startsWith('LICENSE_')) {
+    (async () => {
+      if (!isLicenseAvailable()) {
+        return { ok: false, error: 'The licence module failed to load.' };
+      }
+
+      const gate = globalThis.LicenseGate;
+
+      switch (message.action) {
+        case 'LICENSE_STATUS':
+          return { ok: true, ...(await gate.getStatus()) };
+
+        case 'LICENSE_ACTIVATE': {
+          const result = await gate.activate(message.payload || {});
+          return { ...result, ...(await gate.getStatus()) };
+        }
+
+        case 'LICENSE_RECHECK': {
+          const result = await gate.recheck({ force: true });
+          return { ...result, ...(await gate.getStatus()) };
+        }
+
+        case 'LICENSE_DEACTIVATE': {
+          await gate.deactivate();
+          return { ok: true, ...(await gate.getStatus()) };
+        }
+
+        default:
+          return { ok: false, error: `Unknown licence action ${message.action}` };
+      }
+    })()
+      .then(sendResponse)
+      .catch(error => sendResponse({ ok: false, error: error?.message || 'Licence request failed.' }));
 
     return true;
   }
@@ -4083,6 +4176,10 @@ async function runPendingManualStart() {
     await chrome.alarms.clear(MANUAL_START_ALARM_NAME).catch(() => false);
     await chrome.storage.local.remove('pendingManualStart').catch(() => {});
 
+    // Re-checked here as well as at click time: the subscription could have
+    // lapsed, or the grace period run out, during the countdown.
+    if (await blockIfUnlicensed('Scheduled start')) return;
+
     // Same guard auto-start uses: never stack a second run on a live one.
     await reclaimDeadAutomationState().catch(() => false);
     const busy = await getStorage(['automationState', 'providerAutomationStates']);
@@ -4145,6 +4242,10 @@ async function runAutoStart() {
   // Re-read the flag: Auto-start may have been switched off while the alarm was
   // pending.
   if (!(await isAutoStartEnabled())) return;
+
+  // An unactivated profile must not start itself either, or the licence would
+  // only apply to people who press the button.
+  if (await blockIfUnlicensed('Auto-start')) return;
 
   // Continuous mode resuming, a manual Start, or an Inbox Lab job may already
   // have started a run in this profile. Never start a second one on top of it.

@@ -68,6 +68,13 @@ input[type="radio"] {
   accent-color: var(--accent);
 }
 
+/* The hidden attribute must win over any author display rule. Without this a
+   layout rule like .app below quietly re-shows an element the script hid, and
+   two screens end up stacked on top of each other. */
+[hidden] {
+  display: none !important;
+}
+
 .app {
   min-height: 100%;
   padding: 10px;
@@ -1295,4 +1302,66 @@ input[type="radio"] {
   color: var(--red);
   font-size: 10px;
   line-height: 1.35;
+}
+
+/* ── Licence gate ────────────────────────────────────────────────────────── */
+.license-screen .card { padding: 14px; }
+
+.license-intro {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.license-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.license-form .batch-select { width: 100%; min-width: 0; }
+.license-form .btn { margin-top: 2px; }
+
+.license-message {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.license-message.error {
+  background: var(--red-soft);
+  border: 1px solid #fecaca;
+  color: var(--red);
+}
+
+.license-message.warn {
+  background: var(--amber-soft);
+  border: 1px solid #fde68a;
+  color: var(--amber);
+}
+
+.license-foot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+/* Plan and seat count, beside the version line in the footer. */
+.license-strip {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 9.5px;
+}
+
+.license-loading {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }

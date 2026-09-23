@@ -3340,3 +3340,153 @@ async function restorePendingStartCountdown() {
 }
 
 restorePendingStartCountdown().catch(() => {});
+
+// ── Licence gate UI ──────────────────────────────────────────────────────────
+// The popup never holds the licence key: it is submitted once, the field is
+// cleared, and every later read comes back redacted from the service worker.
+
+const licenseScreen = $('licenseScreen');
+const appMain = $('appMain');
+const licenseEmailInput = $('licenseEmailInput');
+const licenseKeyInput = $('licenseKeyInput');
+const btnLicenseActivate = $('btnLicenseActivate');
+const licenseMessage = $('licenseMessage');
+const licenseDeviceLabel = $('licenseDeviceLabel');
+const licenseStrip = $('licenseStrip');
+const licenseLoading = $('licenseLoading');
+
+function showLicenseMessage(text, tone = 'error') {
+  if (!licenseMessage) return;
+  if (!text) {
+    licenseMessage.hidden = true;
+    licenseMessage.textContent = '';
+    return;
+  }
+  licenseMessage.hidden = false;
+  licenseMessage.textContent = text;
+  licenseMessage.className = `license-message ${tone}`;
+}
+
+function formatExpiry(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+}
+
+function renderLicenseStrip(status) {
+  if (!licenseStrip) return;
+  const { state, access } = status;
+
+  if (!access.allowed) {
+    licenseStrip.hidden = true;
+    return;
+  }
+
+  const bits = [];
+  if (state.customerName) bits.push(state.customerName);
+  if (state.plan) bits.push(state.plan);
+  const until = formatExpiry(state.expiresAt);
+  if (until) bits.push(`renews ${until}`);
+  if (state.seatsAllowed) bits.push(`profile ${state.seatsUsed}/${state.seatsAllowed}`);
+
+  licenseStrip.hidden = bits.length === 0;
+  licenseStrip.textContent = bits.join(' · ');
+  licenseStrip.title = access.message || '';
+}
+
+// Decides which of the two screens the popup is showing. Called on open and
+// after every licence operation.
+function applyLicenseStatus(status) {
+  if (!status || !status.access) return;
+
+  if (licenseLoading) licenseLoading.hidden = true;
+  const allowed = status.access.allowed;
+  if (licenseScreen) licenseScreen.hidden = allowed;
+  if (appMain) appMain.hidden = !allowed;
+
+  if (allowed) {
+    renderLicenseStrip(status);
+    // A grace period counting down is worth saying out loud.
+    if (status.access.message) log(status.access.message, 'warn');
+    return;
+  }
+
+  // Re-entering the activation screen: prefill the email so a refused user is
+  // not retyping it, and say plainly what went wrong.
+  if (licenseEmailInput && status.state && status.state.email) {
+    licenseEmailInput.value = status.state.email;
+  }
+
+  if (!status.configured) {
+    showLicenseMessage('This build has no licensing server configured yet. Activation is unavailable.', 'warn');
+  } else if (status.access.status === 'not-activated') {
+    showLicenseMessage('');
+  } else {
+    showLicenseMessage(status.access.message || 'This subscription is not active.', 'error');
+  }
+
+  if (licenseDeviceLabel) {
+    licenseDeviceLabel.textContent = status.state && status.state.seatsAllowed
+      ? `${status.state.seatsUsed} of ${status.state.seatsAllowed} profiles activated.`
+      : 'This profile counts as one activation.';
+  }
+}
+
+async function refreshLicenseStatus() {
+  const status = await sendRuntimeMessage({ action: 'LICENSE_STATUS' }).catch(() => null);
+  if (!status || !status.ok) {
+    // The gate could not be reached at all. Show the app rather than locking
+    // the user out of their own settings over a messaging failure.
+    if (licenseLoading) licenseLoading.hidden = true;
+    if (appMain) appMain.hidden = false;
+    if (licenseScreen) licenseScreen.hidden = true;
+    return null;
+  }
+  applyLicenseStatus(status);
+  return status;
+}
+
+if (btnLicenseActivate) {
+  btnLicenseActivate.addEventListener('click', async () => {
+    const email = licenseEmailInput ? licenseEmailInput.value.trim() : '';
+    const licenseKey = licenseKeyInput ? licenseKeyInput.value.trim() : '';
+
+    btnLicenseActivate.disabled = true;
+    btnLicenseActivate.textContent = 'Checking...';
+    showLicenseMessage('');
+
+    try {
+      const result = await sendRuntimeMessage({
+        action: 'LICENSE_ACTIVATE',
+        payload: { email, licenseKey },
+      });
+
+      // Cleared either way - the key is never kept in the page.
+      if (licenseKeyInput) licenseKeyInput.value = '';
+
+      if (result && result.ok) {
+        applyLicenseStatus(result);
+        log('Extension activated for this profile.', 'success');
+        return;
+      }
+
+      const text = result && (result.error || (result.access && result.access.message));
+      showLicenseMessage(text || 'Activation failed.', 'error');
+    } finally {
+      btnLicenseActivate.disabled = false;
+      btnLicenseActivate.textContent = 'Activate';
+    }
+  });
+}
+
+// Enter submits from either field.
+[licenseEmailInput, licenseKeyInput].forEach(input => {
+  if (!input) return;
+  input.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && btnLicenseActivate && !btnLicenseActivate.disabled) {
+      btnLicenseActivate.click();
+    }
+  });
+});
+
+refreshLicenseStatus().catch(() => {});
