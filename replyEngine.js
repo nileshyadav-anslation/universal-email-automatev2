@@ -41,11 +41,6 @@
       body: ['[data-testid="rooster-editor"]', 'div[contenteditable="true"]'],
       sendButtons: ['[data-testid="composer:send-button"]', 'button[title^="Send"]'],
     },
-    zoho: {
-      replyButtons: ['[aria-label^="Reply"]', '.zmReply', '.reply'],
-      body: ['div[contenteditable="true"]', 'textarea'],
-      sendButtons: ['[aria-label^="Send"]', '.zmSend', '.send'],
-    },
   };
 
   function sleep(ms) {
@@ -324,7 +319,6 @@
         '[id^="UniqueMessageBody_"]',
       ],
       proton: ['[data-testid="message-view"]', '[data-testid="message-content"]', ".message-container", ".message-body"],
-      zoho: [".zmMailContent", ".zmReadMail", ".mailContent", ".zmMsgView"],
     };
 
     const roots = providerRoots[providerName] || commonRoots;

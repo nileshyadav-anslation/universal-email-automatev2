@@ -155,48 +155,6 @@ proton: {
     return item.classList.contains("unread");
   }
 },
-zoho: {
-  host: "mail.zoho.com",
-
-  unreadSelectors: [
-    '.zmMLContainer tr',
-    '.zmMailRow',
-    '[aria-label*="Unread"]'
-  ],
-
-  subjectSelectors: [
-    '.zmMsgSubject',
-    '.subject',
-    '.zmListSubject'
-  ],
-
-  refreshSelectors: [
-    '.zmRfresh',
-    '[aria-label="Refresh"]'
-  ],
-
-  emailOpenSelectors: [
-    '.zmMailContent',
-    '.mailContent',
-    '.zmMsgView'
-  ],
-
-  inboxSelectors: [
-    '.zmMailListContainer',
-    '.zmMailList'
-  ],
-
-  isUnreadRow(row) {
-
-    return (
-      row.classList.contains("unread") ||
-
-      row.classList.contains("newmail") ||
-
-      row.innerHTML.toLowerCase().includes("unread")
-    );
-  }
-},
 
     yahoo: {
       host: "mail.yahoo.com",
@@ -411,9 +369,6 @@ zoho: {
       return PROVIDERS.proton;
    }
 
-   if (host.includes("mail.zoho.com")) {
-    return PROVIDERS.zoho;
-    }
     if (host.includes("mail.yahoo.com")) {
       return PROVIDERS.yahoo;
     }
@@ -1476,15 +1431,6 @@ zoho: {
     );
   }
 
-  // Zoho
-  if (provider.host.includes("zoho")) {
-
-    return (
-      row.querySelector('.zmMailRow') ||
-      row
-    );
-  }
-
   return row;
 }
   /**
@@ -1709,24 +1655,6 @@ zoho: {
     }
 
     window.history.back();
-    return;
-  }
-
-  // Zoho
-  if (provider.host.includes("zoho")) {
-
-    const inboxBtn =
-      document.querySelector('[aria-label="Inbox"]') ||
-      document.querySelector('.zmTreeInbox');
-
-    if (inboxBtn) {
-      inboxBtn.click();
-      return;
-    }
-
-    window.location.href =
-      "https://mail.zoho.com/zm/";
-
     return;
   }
 
@@ -2203,10 +2131,6 @@ zoho: {
       return row.closest('[data-shortcut-target="item-container"]') ||
         row.closest(".item-container") ||
         row;
-    }
-
-    if (provider.host.includes("zoho")) {
-      return row.querySelector(".zmMailRow") || row.querySelector("tr") || row;
     }
 
     return row;

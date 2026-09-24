@@ -2211,8 +2211,7 @@ async function getMailTab() {
       tab.url.includes('mail.yahoo.com') ||
       tab.url.includes('mail.aol.com')  ||
       tab.url.includes('outlook.live.com') ||
-      tab.url.includes('mail.proton.me') ||
-      tab.url.includes('mail.zoho.com')
+      tab.url.includes('mail.proton.me')
     );
   }) || null;
 }

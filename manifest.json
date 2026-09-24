@@ -23,7 +23,6 @@
     "https://api.ipify.org/*",
     "https://api64.ipify.org/*",
     "https://mail.proton.me/*",
-    "https://mail.zoho.com/*",
     "https://api.brevo.com/*",
     "https://api.sendgrid.com/*",
     "https://*.api.mailchimp.com/*",
@@ -49,8 +48,7 @@
         "https://mail.yahoo.com/*",
         "https://mail.aol.com/*",
         "https://outlook.live.com/*",
-        "https://mail.proton.me/*",
-        "https://mail.zoho.com/*"
+        "https://mail.proton.me/*"
       ],
       "js": [
         "linkProcessor.js",

@@ -9,7 +9,6 @@ Browser extension that automatically opens and reads unread emails one by one.
 * AOL Mail
 * Outlook
 * Proton Mail
-* Zoho Mail
 
 ## Installation
 

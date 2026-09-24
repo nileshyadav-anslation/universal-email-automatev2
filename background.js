@@ -148,8 +148,7 @@ const PROVIDER_URLS = {
   yahoo: 'https://mail.yahoo.com/n/folders/1?.src=ym&reason=myc',
   aol: 'https://mail.aol.com/d/folders/1',
   outlook: 'https://outlook.live.com/mail/0/',
-  proton: 'https://mail.proton.me/',
-  zoho: 'https://mail.zoho.com'
+  proton: 'https://mail.proton.me/'
 };
 const GOOGLE_LIST_ACCOUNTS_URL = 'https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard';
 const GMAIL_PROBE_MAX_INDEX = 99;
@@ -163,8 +162,7 @@ const PROVIDER_LABELS = {
   yahoo: 'Yahoo',
   aol: 'AOL',
   outlook: 'Outlook',
-  proton: 'Proton',
-  zoho: 'Zoho'
+  proton: 'Proton'
 };
 
 function getProviderStartUrl(provider = 'gmail') {
@@ -177,8 +175,7 @@ function isMailUrl(url = '') {
     url.includes('mail.yahoo.com') ||
     url.includes('mail.aol.com') ||
     url.includes('outlook.live.com') ||
-    url.includes('mail.proton.me') ||
-    url.includes('mail.zoho.com')
+    url.includes('mail.proton.me')
   );
 }
 
@@ -190,8 +187,7 @@ function isProviderUrl(url = '', provider = 'gmail') {
     yahoo: 'mail.yahoo.com',
     aol: 'mail.aol.com',
     outlook: 'outlook.live.com',
-    proton: 'mail.proton.me',
-    zoho: 'mail.zoho.com'
+    proton: 'mail.proton.me'
   };
 
   return url.includes(providerHosts[provider] || providerHosts.gmail);
