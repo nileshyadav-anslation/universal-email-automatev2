@@ -1305,10 +1305,132 @@ input[type="radio"] {
 }
 
 /* ── Licence gate ────────────────────────────────────────────────────────── */
-.license-screen .card { padding: 14px; }
+.license-screen {
+  padding: 14px 14px 12px;
+  gap: 12px;
+}
+
+.license-screen .card { padding: 12px; }
+
+/* The first thing anyone sees after installing. It has to say what this is
+   before it asks for anything. */
+.license-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 7px;
+  padding: 2px 6px 0;
+}
+
+.license-hero-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+}
+
+.license-hero-title {
+  color: var(--text);
+  font-size: 15.5px;
+  font-weight: 750;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.license-hero-sub {
+  max-width: 316px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.license-perks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.license-perks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.license-perks svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  /* Nudged down so the icon centres on the first line, not the whole block. */
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.license-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.license-field-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* Its own class rather than .batch-select, which is a dropdown style and
+   carries cursor: pointer - wrong for something you type into. */
+.license-input {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.license-input::placeholder {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.license-input:hover { border-color: var(--border-hover); }
+
+.license-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+.license-activate {
+  min-height: 36px;
+  margin-top: 2px;
+  font-size: 13px;
+}
 
 .license-intro {
-  margin: 0 0 12px;
+  margin: 0 0 11px;
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.45;
@@ -1317,11 +1439,9 @@ input[type="radio"] {
 .license-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-.license-form .batch-select { width: 100%; min-width: 0; }
-.license-form .btn { margin-top: 2px; }
 
 .license-message {
   margin-top: 10px;
@@ -1344,11 +1464,12 @@ input[type="radio"] {
 }
 
 .license-foot {
-  margin-top: 12px;
-  padding-top: 10px;
+  margin-top: 11px;
+  padding-top: 9px;
   border-top: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 10px;
+  text-align: center;
 }
 
 /* Plan and seat count, beside the version line in the footer. */
