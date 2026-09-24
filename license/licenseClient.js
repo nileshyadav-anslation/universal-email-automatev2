@@ -108,8 +108,25 @@
       });
     } catch (error) {
       clearTimeout(timer);
-      // Unreachable, not refused.
-      return { reachable: false, error: "Could not reach the licensing server." };
+
+      // Unreachable, not refused - but say WHICH unreachable. Collapsing
+      // connection-refused, DNS failure, a scheme typo, a proxy refusal and a
+      // timeout into one identical red line cost a whole afternoon of
+      // guessing, because "the server is off" and "Chrome is blocking this"
+      // looked exactly the same from the popup.
+      const name = (error && error.name) || "Error";
+      const detail = `${name}: ${(error && error.message) || "unknown"}`;
+      console.warn("[License] fetch failed", { url: `${baseUrl()}${path}`, name, message: error && error.message });
+
+      if (name === "AbortError") {
+        return {
+          reachable: false,
+          error: `The licensing server did not answer within ${REQUEST_TIMEOUT_MS / 1000}s.`,
+          detail,
+        };
+      }
+
+      return { reachable: false, error: "Could not reach the licensing server.", detail };
     }
     clearTimeout(timer);
 
@@ -124,11 +141,11 @@
     // A server that is up but broken is still "cannot get a definite answer",
     // so it must not lock anyone out.
     if (response.status >= 500) {
-      return { reachable: false, error: "The licensing server is having problems." };
+      return { reachable: false, error: "The licensing server is having problems.", detail: `HTTP ${response.status}` };
     }
 
     if (response.status === 429) {
-      return { reachable: false, error: "The licensing server is rate limiting this request." };
+      return { reachable: false, error: "The licensing server is rate limiting this request.", detail: "HTTP 429" };
     }
 
     if (response.status === 401 || response.status === 403) {
@@ -141,7 +158,11 @@
     }
 
     if (!response.ok || !parsed) {
-      return { reachable: false, error: `Unexpected response from the licensing server (HTTP ${response.status}).` };
+      return {
+        reachable: false,
+        error: `Unexpected response from the licensing server (HTTP ${response.status}).`,
+        detail: `HTTP ${response.status} at ${baseUrl()}${path}`,
+      };
     }
 
     if (parsed.active === true) {

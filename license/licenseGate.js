@@ -47,12 +47,14 @@
     }
 
     if (!state.active) {
-      return {
-        allowed: false,
-        status: "refused",
-        reason: state.lastReason || "",
-        message: state.lastError || "This subscription is not active.",
-      };
+      // Read only from the refusal fields. lastError is written solely by a
+      // definite answer, so an earlier unreachable server cannot be replayed
+      // here as the reason.
+      const reason = state.lastReason || "";
+      const message = state.lastError
+        || (reason && LicenseClient.messageForReason(reason))
+        || "This subscription is not active.";
+      return { allowed: false, status: "refused", reason, message };
     }
 
     const age = daysSince(state.lastVerifiedAt);
@@ -95,8 +97,16 @@
     });
 
     if (!result.reachable) {
-      await LicenseStorage.saveLicenseState({ lastError: result.error || "" });
-      return { ok: false, unreachable: true, error: result.error || "" };
+      await LicenseStorage.saveLicenseState({
+        lastUnreachableError: result.error || "",
+        lastUnreachableAt: new Date().toISOString(),
+      });
+      return {
+        ok: false,
+        unreachable: true,
+        error: result.error || "",
+        detail: result.detail || "",
+      };
     }
 
     if (!result.active) {
@@ -108,6 +118,8 @@
         lastVerifiedAt: new Date().toISOString(),
         lastReason: result.reason || "",
         lastError: result.message || "",
+        lastUnreachableError: "",
+        lastUnreachableAt: "",
         seatsUsed: result.seatsUsed || 0,
         seatsAllowed: result.seatsAllowed || 0,
       });
@@ -127,6 +139,8 @@
       lastVerifiedAt: new Date().toISOString(),
       lastReason: "",
       lastError: "",
+      lastUnreachableError: "",
+      lastUnreachableAt: "",
     });
 
     return { ok: true, state: saved };
@@ -152,7 +166,8 @@
         : "";
       log(`Activated for ${cleanEmail}.${seats}`, "success");
     } else if (result.unreachable) {
-      log(`Could not reach the licensing server. ${result.error}`, "error");
+      const detail = result.detail ? ` (${result.detail})` : "";
+      log(`${result.error}${detail}`, "error");
     } else {
       log(`Activation refused: ${result.error}`, "error");
     }

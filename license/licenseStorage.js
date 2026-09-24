@@ -39,12 +39,21 @@
       customerName: "",
       seatsUsed: 0,
       seatsAllowed: 0,
+      hasActivated: false,
       // When the backend last gave a definite answer, successful or not. The
       // grace period is measured from here.
       lastVerifiedAt: "",
-      // Why the last check failed, if it did. Shown to the user verbatim.
+      // Why the subscription was REFUSED, if it was. These two belong to a
+      // definite answer only.
       lastReason: "",
       lastError: "",
+      // A server we could not reach is a different thing and is recorded
+      // separately. Sharing one field meant a transport blip was replayed
+      // later as the reason a subscription was refused - so a profile kept
+      // showing "Could not reach the licensing server." long after the server
+      // came back.
+      lastUnreachableError: "",
+      lastUnreachableAt: "",
     };
   }
 
@@ -56,6 +65,7 @@
       email: String(state.email || "").trim().toLowerCase(),
       licenseKey: String(state.licenseKey || "").trim(),
       active: Boolean(state.active),
+      hasActivated: Boolean(state.hasActivated),
       seatsUsed: Number(state.seatsUsed) || 0,
       seatsAllowed: Number(state.seatsAllowed) || 0,
     };

@@ -595,7 +595,7 @@ async function startAutomationEntryPoint(settings = {}) {
 // license/; this is only the wiring.
 
 function isLicenseAvailable() {
-  return Boolean(globalThis.LicenseGate);
+  return Boolean(globalThis.LicenseGate && globalThis.LicenseStorage);
 }
 
 async function logLicenseEvent(message, level = 'info') {
@@ -611,6 +611,40 @@ if (isLicenseAvailable()) {
   });
 }
 
+// The subscription has to keep being re-confirmed while a profile runs.
+// Nothing was doing that: lastVerifiedAt was written once, at activation, and
+// the grace period is measured from it - so every profile would have refused
+// to start exactly GRACE_PERIOD_DAYS after being activated, against a server
+// that was answering perfectly well. A whole fleet would have stopped on the
+// same afternoon, a week after rollout.
+const LICENSE_RECHECK_ALARM_NAME = 'emailReadAutomate.licenseRecheck';
+const LICENSE_RECHECK_PERIOD_MINUTES = 6 * 60;
+
+async function ensureLicenseRecheckAlarm() {
+  if (!chrome.alarms) return;
+  const existing = await chrome.alarms.get(LICENSE_RECHECK_ALARM_NAME).catch(() => null);
+  if (existing) return;
+  // An alarm rather than setTimeout: the service worker is torn down
+  // constantly and a timer would not survive it.
+  await chrome.alarms.create(LICENSE_RECHECK_ALARM_NAME, {
+    periodInMinutes: LICENSE_RECHECK_PERIOD_MINUTES,
+    delayInMinutes: 1,
+  });
+}
+
+// recheck() throttles itself against RECHECK_INTERVAL_HOURS, so calling this
+// often is cheap. Never throws: a failed re-check must not take down whatever
+// asked for it.
+async function recheckLicense({ force = false } = {}) {
+  if (!isLicenseAvailable()) return null;
+  try {
+    return await globalThis.LicenseGate.recheck({ force });
+  } catch (error) {
+    console.warn('[License] Re-check failed', error);
+    return null;
+  }
+}
+
 // Every start path funnels through here. Returns null when the run may proceed,
 // or an error message when it may not. If the licence module failed to load the
 // run is allowed - a broken gate must not brick a paying customer's fleet.
@@ -618,7 +652,23 @@ async function blockIfUnlicensed(context = 'Automation') {
   if (!isLicenseAvailable()) return null;
 
   try {
-    const access = await globalThis.LicenseGate.canRun();
+    const gate = globalThis.LicenseGate;
+    const state = await globalThis.LicenseStorage.getLicenseState();
+
+    if (gate.needsRecheck(state)) {
+      if (gate.evaluateAccess(state).allowed) {
+        // The cached answer still stands, so refresh in the background rather
+        // than making the operator wait on a network round trip.
+        recheckLicense().catch(() => {});
+      } else {
+        // The cached answer would refuse this run. Ask the backend first, so a
+        // profile that simply sat idle past the end of its grace period
+        // recovers by itself instead of needing to be re-activated by hand.
+        await recheckLicense();
+      }
+    }
+
+    const access = await gate.canRun();
     if (access.allowed) {
       // Surface a running-down grace period rather than letting it expire
       // silently mid-fleet.
@@ -4311,6 +4361,11 @@ if (chrome.alarms) {
       return;
     }
 
+    if (alarm.name === LICENSE_RECHECK_ALARM_NAME) {
+      recheckLicense().catch(() => {});
+      return;
+    }
+
     if (alarm.name === AUTO_START_ALARM_NAME) {
       runAutoStart().catch(error => {
         logAutoStartEvent(`[AutoStart] Failed: ${error.message}`, 'error').catch(() => {});
@@ -4439,10 +4494,21 @@ chrome.runtime.onStartup.addListener(() => {
   syncWarmTalkLifecycle().catch(error => {
     console.warn('[WarmTalk] Lifecycle sync failed', error);
   });
+  ensureLicenseRecheckAlarm().catch(error => {
+    console.warn('[License] Re-check alarm re-arm failed', error);
+  });
+  recheckLicense().catch(() => {});
 });
 
 syncWarmTalkLifecycle().catch(error => {
   console.warn('[WarmTalk] Initial lifecycle sync failed', error);
+});
+
+// Also here, not just onStartup/onInstalled: a profile that was already
+// activated before this code existed has no re-check alarm, and would
+// otherwise never get one.
+ensureLicenseRecheckAlarm().catch(error => {
+  console.warn('[License] Re-check alarm setup failed', error);
 });
 
 console.log('[EmailReadAutomate] Background service worker running.');
